@@ -268,6 +268,170 @@ The mathematical derivation may use \eqref{eq:confluent-residue}, but the export
 \end{equation}
 Here \(S\) are causal LTD surfaces and \(p_{\mu,S}\ge1\) are integer powers.  The multi-index \(\mu\) records how the confluent derivative was distributed among known factors.  If needed, \(\mu\) is part of the orientation identifier even when it does not change the numerator replacement rule.
 
+\chapter{CFF--Tau Interpretation of the Confluent Limit}
+
+\section{Why the path-finder is not yet the physical organization}
+
+The implementation that currently passes the tests should be read as an
+algebraic path-finder.  It proves that a derivative-free JSON expression with
+ordinary surface trees, repeated half-edge factors, and one numerator call per
+orientation can reproduce pure CFF and split-mass LTD for the tested affine
+numerator class.  However, its organization is not yet the most physical one.
+The signs in a label such as
+\[
+  000+++|B3|b1|g1|nD0m
+\]
+are collapsed-channel pole signs, not individual CFF signs of the repeated
+copies.  Similarly, the present finite-stencil marker \texttt{nD0m} is an
+algebraic representation of a first derivative.  In the current code this is
+implemented by a unit displacement in the residue-basis energy coordinate.  That
+is numerically exact for affine numerators, but it is not dimensionally natural
+and should not be the final physics-facing formula.
+
+The more physical target is to derive the same finite weights from the CFF
+energy integrations with localizing delta functions and their Fourier
+\(\tau\)-parameters.  In that organization every numerator substitution should
+be built from external energies and internal on-shell energies.  No
+dimensionless constant energy shift should appear in the exported substitution
+maps.
+
+\section{Localizing repeated copies before taking the equal-energy limit}
+
+For one repeated channel with \(\nu\) copies, introduce independent energies
+\(q_a^0\) and localizing deltas,
+\begin{equation}
+  \prod_{a=1}^{\nu}\frac{1}{D_a(q_a)}
+  \prod_{a=1}^{\nu-1}\delta(q_{a+1}^0-q_a^0).
+\end{equation}
+Fourier expanding the deltas gives
+\begin{equation}
+  \prod_{a=1}^{\nu-1}\delta(q_{a+1}^0-q_a^0)
+  =
+  \int \prod_{a=1}^{\nu-1}\frac{\dd\tau_a}{2\pi}
+  \exp\!\left\{
+    \ii\sum_{a=1}^{\nu-1}\tau_a(q_{a+1}^0-q_a^0)
+  \right\}.
+\end{equation}
+For fixed \(\tau\)-cone, each \(q_a^0\) contour is closed according to the sign
+of the coefficient multiplying \(q_a^0\) in the phase.  This produces individual
+copy pole choices
+\begin{equation}
+  q_a^0=\sigma_a\omega_a,\qquad \sigma_a\in\{+1,-1\},
+\end{equation}
+together with a residual \(\tau\)-cone orientation.  These are the physically
+meaningful repeated-edge signs.
+
+At this stage the \(\omega_a\) should be regarded as distinct split energies.
+The CFF/tau expression is then a sum over ordinary simple-pole sectors.  Its
+local weights contain factors depending on differences of signed energies,
+schematically
+\begin{equation}
+  \frac{1}{\sigma_a\omega_a-\sigma_b\omega_b+\cdots},
+\end{equation}
+and the ellipsis denotes external-energy and skeleton-energy shifts generated
+by the residual graph.  Individual sectors can be singular when the repeated
+copies are taken equal.  The finite raised-propagator contribution is obtained
+only after summing a complete \(\tau\)-cone family and then taking
+\(\omega_a\to\omega_g\).
+
+\section{Tau cones become confluent divided differences}
+
+The equal-energy limit of the complete split-copy CFF/tau family is a confluent
+divided difference.  This is the physical origin of the derivatives in
+\eqref{eq:confluent-residue}.  In one variable, a split expression of the form
+\begin{equation}
+  \sum_{a=1}^{\nu}
+  \frac{F(x_a)}
+       {\prod_{b\ne a}(x_a-x_b)}
+\end{equation}
+tends, as \(x_a\to x\), to a derivative of order \(\nu-1\) acting on \(F\).
+The LTD higher-order pole formula is therefore not an alien operation: it is the
+compact notation for the recombined CFF/tau sign-sector sum after localizing the
+repeated copies.
+
+This observation also explains why the old local-chain table looked plausible
+but failed as a standalone JSON expression.  It kept individual repeated-copy
+sign sectors, but it did not carry the complete singular divided-difference
+weight and did not perform the equal-energy recombination before export.
+
+\section{Physical numerator sampling}
+
+The numerator should remain black-box.  The physical CFF/tau route suggests the
+following replacement for the present unit finite stencil.
+\begin{enumerate}[leftmargin=2em]
+  \item Keep the repeated copies split through the local CFF/tau sign sum.
+  \item Evaluate the black-box numerator at the signed on-shell copy energies
+        \(\sigma_a\omega_a\) and at the affine skeleton substitutions generated
+        by the same \(\tau\)-cone.
+  \item Recombine complete \(\tau\)-cone families into finite confluent weights.
+  \item Only then set \(\omega_a=\omega_g\).
+\end{enumerate}
+For an affine EMR-energy numerator this procedure must reduce to the same
+derivative information that the path-finder currently obtains from
+\texttt{nD0p}/\texttt{nD0m}.  The difference is representational: the physical
+samples are made at on-shell energies and external-energy shifts, rather than
+at arbitrary dimensionless displacements of a residue-basis coordinate.
+
+In the final JSON, such a recombined physical sector should still look like an
+ordinary orientation entry:
+\begin{itemize}[leftmargin=2em]
+  \item the denominator tree stores the finite confluent surface powers;
+  \item repeated \texttt{half\_edges} store powers of cut \(2\omega\) factors;
+  \item \texttt{pref} stores the rational/combinatorial weight;
+  \item \texttt{loop\_q0} and \texttt{edge\_q0} store one physical numerator
+        substitution rule.
+\end{itemize}
+Thus the evaluator contract need not change.  What should change is the
+orientation construction and naming.
+
+\section{Implications for orientation labels}
+
+The current label
+\[
+  B3|b1|g1|nD0m
+\]
+is useful for debugging the algebraic expansion:
+\begin{itemize}[leftmargin=2em]
+  \item \(B3\) means the collapsed powered channel is in the LTD basis;
+  \item \(b1\) means one confluent derivative was assigned to the numerator
+        interpolation part;
+  \item \(g1\) means one derivative was assigned to the known denominator
+        weight;
+  \item \texttt{nD0m} means the minus point of an algebraic numerator
+        derivative stencil.
+\end{itemize}
+The more physical label should record a recombined CFF/tau sector instead.  A
+candidate structure is
+\[
+  (B,\sigma_{\rm chain};\Sigma_R;\mu),
+\]
+where \(\Sigma_R\) denotes either a concrete repeated-copy sign pattern or,
+better, the complete \(\tau\)-cone orbit whose equal-energy limit has already
+been recombined.  For the dotted box, the current collapsed prefix \(000+++\)
+should therefore not be interpreted as saying that the only physical repeated
+copy sector is \(+++\).  It says only that the collapsed third-order pole is the
+positive-energy pole of the repeated channel.  Mixed repeated-copy sign sectors
+are expected to reappear in the physical CFF/tau organization as members of the
+orbit whose confluent limit produces the same \(b/g/\mu\)-type weights.
+
+\section{Next theoretical target}
+
+The next derivation step should start from the split repeated-copy CFF/tau
+expression, not from the already-collapsed higher-pole residue.  The concrete
+program is:
+\begin{enumerate}[leftmargin=2em]
+  \item derive the local repeated-block \(\tau\)-cone weights for a split
+        \(\nu\)-copy chain;
+  \item group sign sectors into complete orbits with finite equal-energy
+        limits;
+  \item show that each orbit reproduces one or more terms in the current
+        confluent expansion;
+  \item replace the current unit derivative stencil by on-shell divided
+        differences so that every emitted energy substitution is a linear
+        combination of external energies and internal on-shell energies;
+  \item keep the final output in the same orientation JSON format.
+\end{enumerate}
+
 \chapter{Corrected Master Formula}
 
 \section{Orientation data}
