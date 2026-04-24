@@ -52,7 +52,7 @@
 \begin{document}
 \maketitle
 \begin{abstract}
-  This note records a self-contained derivation of the hybrid representation implemented in the current DOT-only prototype.  The purpose is narrow: repeated propagator powers are represented by distinct graph edges with identical momentum routing and identical symbolic mass key.  For one-loop repeated-channel graphs the representation combines ordinary LTD on the non-repeated part with a local CFF/Fourier treatment of the repeated channel.  The central point is the order of operations.  Localizing deltas are written in Fourier form.  At fixed Fourier parameters, the energy integrals are ordinary Feynman energy integrals multiplied by complex exponentials; the sign of the corresponding Fourier combination fixes whether the contour must be closed above or below.  After this LTD step, the remaining Fourier integrals are cone integrals of the CFF type, shifted by the already-chosen LTD/on-shell chain data.  In multi-loop graphs, however, the repeated-sector Fourier sums generally couple in the contour-closure inequalities; the implementation therefore uses a coupled CFF-cone kernel for those cases rather than the invalid product of independent local cones.  The final orientation label stores the edge-sign string together with either local chain signs or a coupled-cone marker, and the exported JSON stores the resulting numerator substitution map explicitly for every original edge.
+  This note records a self-contained derivation of the hybrid representation implemented in the current DOT-only prototype.  The purpose is narrow: repeated propagator powers are represented by distinct graph edges with identical momentum routing and identical symbolic mass key.  Localizing deltas are written in Fourier form, so the remaining energy problem is a polyhedral cone problem of the CFF type.  The implementation now uses the same coupled CFF-cone kernel for every repeated-channel graph, including the one-loop dotted box.  This avoids the invalid product of independent local cones in multi-loop cases and also avoids artificial surfaces with coefficients such as \(2\omega_e\) or \(3\omega_e\).  The final orientation label stores the edge-sign string together with a coupled-cone marker, and the exported JSON stores the resulting numerator substitution map explicitly for every original edge.
 \end{abstract}
 \tableofcontents
 
@@ -279,9 +279,9 @@ Thus the chain sign is fixed by the sign of a single real linear form in the pos
   \chi_g=-\sgn\left(\sum_{a=1}^{\nu_g}\sigma_{g,a}\alpha_{g,a}\right).
   \label{eq:chain-sign-cone}
 \end{equation}
-If all copy signs $\sigma_{g,a}$ are equal, only one value of $\chi_g$ has a non-empty cone.  If the signs are mixed, both $\chi_g=+1$ and $\chi_g=-1$ are possible.  This proves the key compression used in the implementation: for each repeated set one needs only one additional binary chain sign, not one extra hidden sign per copy.
+If all copy signs $\sigma_{g,a}$ are equal, only one value of $\chi_g$ has a non-empty cone.  If the signs are mixed, both $\chi_g=+1$ and $\chi_g=-1$ are possible.  This is a useful compression in the decoupled local derivation.  The exported implementation keeps the more general coupled-cone marker instead of per-channel chain signs.
 
-\section{The tau cones and the local CFF factor}
+\section{The tau cones and the coupled CFF factor}
 
 Insert \eqref{eq:fixed-tau-ltd} and \eqref{eq:copy-substitution} into \eqref{eq:fourier-all}.  For each repeated set $g$, each copy-sign vector $\sigma_g=(\sigma_{g,1},\ldots,\sigma_{g,\nu_g})$, and each chain sign $\chi_g$ define the cone
 \begin{equation}
@@ -312,25 +312,25 @@ Therefore the remaining Fourier integral over the cone is
     \bigl(\omega_{g,a}-\sigma_{g,a}Q_{g,b}^0(\chi)\bigr)\right].
   \label{eq:cone-integral}
 \end{equation}
-The integral \eqref{eq:cone-integral} is exactly a CFF cone integral: the cone is polyhedral, its facets are linear, and its evaluation is a sum/product of inverse linear causal surfaces.  The implementation stores this factorized result as a tree of surface ids.  In particular, if the cone is simplicial with primitive generators $v_j$, then one term has the form
+The integral \eqref{eq:cone-integral} is exactly a CFF cone integral: the cone is polyhedral, its facets are linear, and its evaluation is a sum/product of inverse linear causal surfaces.  The implementation does not special-case one-loop repeated sectors.  Instead it uses the same CFF graph-contraction cone kernel for the whole repeated graph, so the dotted box and the multi-loop topologies follow the same exported JSON convention.  In particular, if a cone were evaluated after choosing primitive generators $v_j$, then one term would have the form
 \begin{equation}
   \prod_j\frac{\ii}{v_j\cdot A_{g,b}(\sigma_g,\chi_g)-\ii0},
   \qquad
   A_{g,b,a}=\omega_{g,a}-\sigma_{g,a}Q_{g,b}^0(\chi),
 \end{equation}
-while non-simplicial cones are decomposed into a sum of such products.  This is the same operation performed by the ordinary CFF graph-contraction algorithm; the only difference is the shift $Q_{g,b}^0(\chi)$ inherited from the earlier LTD step.
+while non-simplicial cones are decomposed into a sum of such products.  This generator form is useful for derivation, but the code deliberately keeps the CFF contraction form as the canonical exported representation.
 
-The product over independent factors \(\CFF_g\) is a one-loop or otherwise decoupled repeated-sector formula.  In a general multi-loop graph a chosen energy-basis coordinate \(u_j\) sees the Fourier coefficient
+The product over independent factors \(\CFF_g\) is only a decoupled repeated-sector formula.  In a general multi-loop graph a chosen energy-basis coordinate \(u_j\) sees the Fourier coefficient
 \begin{equation}
   \Lambda_j(\tau)=\sum_g c_{gj}T_g(\tau),
 \end{equation}
-where \(Q_g^0=\sum_j c_{gj}u_j+\hbox{external shifts}\).  The closure condition is then \(\sgn\Lambda_j\), not the sign of a single \(T_g\).  Dependent or overlapping repeated channels therefore define one coupled polyhedral cone in all repeated-copy \(\alpha\)-variables.  Treating that cone as a product of the individual \(\VC_g\) misses residues; this is the failure mode exposed by the sunrise and nested-kite examples.  The code consequently evaluates such sectors with the coupled CFF-cone kernel.
+where \(Q_g^0=\sum_j c_{gj}u_j+\hbox{external shifts}\).  The closure condition is then \(\sgn\Lambda_j\), not the sign of a single \(T_g\).  Dependent or overlapping repeated channels therefore define one coupled polyhedral cone in all repeated-copy \(\alpha\)-variables.  Treating that cone as a product of the individual \(\VC_g\) misses residues; this is the failure mode exposed by the sunrise and nested-kite examples.  Since the coupled formula also covers the dotted box, the implementation uses it uniformly.
 
 \section{Hybrid orientation and numerator substitution map}
 
 An exported hybrid orientation is
 \begin{equation}
-  \mathfrak o=(\varsigma_e)_{e\in E_{\rm int}}\;\big|\;(\chi_g)_{g\in\VR},
+  \mathfrak o=(\varsigma_e)_{e\in E_{\rm int}}\;\big|\;\mathrm{coupled},
 \end{equation}
 where
 \begin{equation}
@@ -340,7 +340,7 @@ where
     0,            & \hbox{otherwise}.
   \end{cases}
 \end{equation}
-The chain signs after the vertical bar are ordered by the minimum edge id in each repeated set.  For a given $\mathfrak o$, the numerator substitution map is stored explicitly.  It is defined by the following equations:
+The marker after the vertical bar records that the repeated sector was evaluated by the coupled CFF-cone kernel.  For a given $\mathfrak o$, the numerator substitution map is stored explicitly.  In a local-chain derivation it can be described by the following equations:
 \begin{align}
   q_{r_{g,a}}^0(\mathfrak o) & =\sigma_{g,a}\omega_{r_{g,a}},
                              &                                               & r_{g,a}\in R_g, \label{eq:subst-rep}                                      \\
@@ -372,7 +372,7 @@ Let $\VB$ denote the set of residual simple-pole LTD bases compatible with the r
     \;J_b\;H_b
     \prod_{h\in\mathcal H_b}\frac{1}{S_h^{\rm LTD}(\vec k)}
     \prod_{e\in\mathcal E_b}\frac{1}{S_e^{\rm LTD}(\vec k)}
-    \prod_g \CFF_g(\sigma_g,\chi_g;Q_{g,b}^0)
+    \CFF_{\rm rep}^{\rm coupled}(\sigma,\chi;Q_b^0)
     \Biggr]
   \notag                       \\
    & \equiv
@@ -385,8 +385,8 @@ Here:
   \item $\mathcal I_{\rm split}^{4D}$ is the exactly localized integrand in \eqref{eq:fourier-all};
   \item $J_b$ is the determinant/Jacobian and half-edge prefactor of the ordinary simple-pole LTD residue basis $b$;
   \item $H_b$ is the residue sign from the contour closure vector determined by \eqref{eq:closure-rule};
-  \item $S_h^{\rm LTD}$ and $S_e^{\rm LTD}$ are ordinary dual/LTD denominator surfaces of the residual simple graph after repeated-channel chain data have been fixed;
-  \item $\CFF_g$ is the local cone integral \eqref{eq:cone-integral}, evaluated by the standard CFF contraction algorithm;
+  \item $S_h^{\rm LTD}$ and $S_e^{\rm LTD}$ are the corresponding causal denominator surfaces in the coupled CFF-cone representation;
+  \item $\CFF_{\rm rep}^{\rm coupled}$ is the coupled repeated-sector cone integral, evaluated by the standard CFF contraction algorithm;
   \item $\VQ_{b,\sigma,\chi}$ is the explicit substitution map \eqref{eq:subst-rep}--\eqref{eq:subst-rest}.
 \end{itemize}
 The classification of a displayed surface
@@ -395,6 +395,8 @@ The classification of a displayed surface
 \end{equation}
 
 defines an $E$-surface when all non-zero internal coefficients $c_e$ have the same sign, and an $H$-surface when both signs occur.  This is the convention used by the pretty printer.
+
+In the exported CFF-cone representation every internal on-shell energy appears with coefficient \(0\), \(+1\), or \(-1\).  Repeated propagator copies may have numerically identical on-shell energies, but they remain distinct edge labels in the JSON.  Thus a surface involving two repeated copies is stored as \(\omega_{r_1}+\omega_{r_2}\), not as \(2\omega_r\).  This is not just cosmetic: keeping copy labels prevents accidental loss of the edge-wise numerator substitution map.  Earlier local-cone triangulations of the dotted box could produce primitive-ray combinations such as \(2\omega_{r_1}+\omega_{r_2}\); those were artifacts of that non-canonical triangulation and are avoided by using the general coupled CFF-cone kernel uniformly.
 
 \chapter{The one-loop dotted box in detail}
 
@@ -485,9 +487,9 @@ with
   S_{i,+}(\chi)=\chi\omega_\star+\omega_i+\Delta_i.
   \label{eq:box-skeleton-surfaces}
 \end{equation}
-These are precisely the surfaces that appear as the LTD skeleton part of the hybrid expression.  Depending on the signs of the internal-energy coefficients they are displayed as either $E$- or $H$-surfaces.
+These are useful surfaces in the decoupled one-loop derivation.  They are not the canonical JSON surfaces emitted by the current implementation, which instead keeps the coupled CFF-cone contraction form even for the dotted box.
 
-This chain-pole shortcut is not a valid general multi-loop rule.  After copy localization, repeated denominators live in the copy variables \(z_{g,a}\); a repeated-channel value \(z=z_\chi\) is not automatically an available pole of every remaining energy integral.  The safe statement is the fixed-\(\tau\) closure rule above, followed either by the validated one-loop local cone or by the coupled cone construction.
+This chain-pole shortcut is not a valid general multi-loop rule.  After copy localization, repeated denominators live in the copy variables \(z_{g,a}\); a repeated-channel value \(z=z_\chi\) is not automatically an available pole of every remaining energy integral.  The safe implementation path is the coupled cone construction.
 
 \section{The remaining tau integral for the box}
 
@@ -508,11 +510,11 @@ Thus the local repeated block is
     \right].
   \label{eq:box-local-cff}
 \end{equation}
-The CFF contraction of this cone produces a factorized tree of inverse linear surfaces.  The important point is that all ordinary-edge shifts in \eqref{eq:box-skeleton-surfaces} are already fixed before the cone integral is evaluated.  Therefore the local CFF block is shifted by the chain sign and by the chosen skeleton chain value.
+The CFF contraction of this cone produces a factorized tree of inverse linear surfaces.  This local form is mathematically useful for checking the one-loop case, but it is not kept as a separate backend branch because its primitive-ray triangulations can combine equal repeated-copy energies into coefficients such as \(2\omega\).  The general CFF contraction keeps repeated copies as separate edge energies.
 
 \section{Final dotted-box hybrid expression}
 
-Combining the residue prefactors, skeleton surfaces, local cone factor and numerator substitution map gives
+Combining the residue prefactors, skeleton surfaces, local cone factor and numerator substitution map gives the decoupled one-loop expression
 \begin{align}
   I_{\Box,\rm hyb}^{(3D)}(\vec\ell)
    & =\sum_{\sigma\in\{\pm1\}^3}
@@ -538,11 +540,11 @@ where
   \bigr).
   \label{eq:box-numerator-map}
 \end{equation}
-This is exactly the structure exported by the Python build command for the box:
+The current Python build command does not export this specialized local-chain form.  It exports the same coupled CFF-cone form used for all repeated-channel graphs:
 \begin{equation}
-  \hbox{orientation label } 000\sigma_3\sigma_4\sigma_5|\chi,
+  \hbox{orientation label } \sigma_0\sigma_1\sigma_2\sigma_3\sigma_4\sigma_5|\mathrm{coupled},
 \end{equation}
-with zero signs on ordinary edges, individual signs on repeated edges, and one chain sign after the vertical bar.  The expression \eqref{eq:box-final} is pointwise equal to the split-mass simple-propagator LTD representation in the limit where the repeated masses are identified, and it is also pointwise equal to the pure CFF representation of the same localized graph.
+with the ordinary CFF edge signs before the vertical bar and a coupled-cone marker after it.  The expression \eqref{eq:box-final} is pointwise equal to the split-mass simple-propagator LTD representation in the limit where the repeated masses are identified, and it is also pointwise equal to the pure CFF representation of the same localized graph; the coupled CFF export is the canonical form used for numerical evaluation.
 
 \chapter{Python implementation and tests}
 
@@ -584,9 +586,9 @@ prints:
 For example,
 \begin{lstlisting}
 python hybrid3d.py build --family hybrid --dot examples/box_pow3.dot \
-  --pretty --show-details-for-orientation '000+--|+'
+  --pretty --show-details-for-orientation '+-----|coupled'
 \end{lstlisting}
-shows the substitution map corresponding to \eqref{eq:box-numerator-map}.
+shows one coupled-cone substitution map for the box.
 
 \section{The diagnostic test command}
 
@@ -608,7 +610,7 @@ The regression suite covers:
 \begin{itemize}[leftmargin=2em]
   \item validation of all shipped DOT examples except the intentionally invalid noisy graph;
   \item absence of doubled external-energy shifts in CFF surfaces;
-  \item presence and evaluation of LTD skeleton surfaces inside the hybrid tree;
+  \item presence and evaluation of exported denominator surfaces inside the hybrid tree;
   \item JSON-driven mutation sensitivity of both surfaces and edge substitutions;
   \item family-distinct structures for repeated-channel graphs;
   \item box tests with dot-product numerators on ordinary and repeated edges;

@@ -2,17 +2,16 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from fractions import Fraction
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 import itertools
 import mpmath as mp
 
-from .graph_io import ParsedGraph, ParsedGraphExternalEdge, repeated_groups, _strip_quotes
-from .ltd_cut_structure_generator import CutStructureGenerator, CLOSE_ABOVE, CLOSE_BELOW
+from .graph_io import ParsedGraph, repeated_groups, _strip_quotes
+from .ltd_cut_structure_generator import CutStructureGenerator, CLOSE_BELOW
 
 Signature = Tuple[Tuple[int, ...], Tuple[int, ...]]
 ThreeVector = Tuple[float, float, float]
 FourVector = Tuple[float, float, float, float]
-NumeratorFn = Callable[[Sequence[FourVector], Sequence[FourVector]], float]
 mp.mp.dps = 80
 
 @dataclass(frozen=True)
@@ -343,22 +342,6 @@ def build_pure_cff_bundle(parsed):
             terms.append(OrientationTerm(orientation_id_from_signs(signs),'pure_cff',bc,tuple(signs),overall_sign,tuple(range(n_internal)),chain,loop_exprs,edge_exprs,{'basis':list(basis),'source':'acyclic_orientation'})); bc+=1
     return ExpressionBundle('pure_cff',tuple(),tuple(),signatures,sb.build(),tuple(terms))
 
-def _det_fraction(rows):
-    n=len(rows); A=[[Fraction(x) for x in row] for row in rows]; det=Fraction(1); sign=1
-    for col in range(n):
-        piv=None
-        for r in range(col,n):
-            if A[r][col] != 0: piv=r; break
-        if piv is None: return Fraction(0)
-        if piv != col:
-            A[col],A[piv]=A[piv],A[col]; sign *= -1
-        pv=A[col][col]; det *= pv
-        for r in range(col+1,n):
-            if A[r][col] != 0:
-                fac=A[r][col]/pv
-                for c in range(col,n): A[r][c] -= fac*A[col][c]
-    return det*sign
-
 def build_pure_ltd_bundle(signatures,n_external_symbols=None):
     n_internal=len(signatures); n_loops=len(signatures[0][0]); n_external_symbols=n_external_symbols if n_external_symbols is not None else len(signatures[0][1]); sb=SurfaceCacheBuilder(); terms=[]; bc=0
     residues=CutStructureGenerator([sig[0] for sig in signatures]).get_residues([CLOSE_BELOW]*n_loops, simplify=True)
@@ -375,274 +358,6 @@ def build_pure_ltd_bundle(signatures,n_external_symbols=None):
         pref=1 if float(residue['sign']) > 0 else -1
         terms.append(OrientationTerm(orientation_id_from_signs(edge_orient),'pure_ltd',bc,tuple(edge_orient),pref,tuple(basis),tuple(chain),loop_exprs,edge_exprs,{'basis':list(basis),'cut_signs':cut_signs,'source':'canonical_ltd_residue'})); bc+=1
     return ExpressionBundle('pure_ltd',tuple(),tuple(),tuple(signatures),sb.build(),tuple(terms))
-def _label_with_chain(edge_signs, chain_signs): return orientation_id_from_signs(edge_signs)+('|' + orientation_id_from_signs(chain_signs) if chain_signs else '')
-def _group_rank_basis(signatures, rep_groups, chain_signs):
-    chosen=[]; rows=[]; target=[]
-    for grp,chi in zip(rep_groups,chain_signs):
-        eid=grp.edge_ids[0]; rel=grp.rel_signs[0]; row=list(signatures[eid][0]); cand=rows+[row]
-        if _rank(cand)>_rank(rows): chosen.append(eid); rows.append(row); target.append(int(rel)*int(chi))
-    return chosen, rows, target
-def _complete_basis(signatures, chosen, rows, avoid):
-    n_loops=len(signatures[0][0]); out=list(chosen)
-    for eid,sig in enumerate(signatures):
-        if eid in out or eid in avoid: continue
-        row=list(sig[0]); cand=rows+[row]
-        if _rank(cand)>_rank(rows): out.append(eid); rows.append(row)
-        if len(out)==n_loops: break
-    if len(out)!=n_loops: raise ValueError('Could not complete hybrid basis')
-    return out
-def _chain_choices(vals):
-    vals=[int(v) for v in vals]
-    return [-vals[0]] if all(v==vals[0] for v in vals) else [-1,1]
-def _make_hybrid_substitution_maps(signatures,n_external_symbols,rep_groups,edge_signs,chain_signs):
-    n_internal=len(signatures); rep_ids={e for g in rep_groups for e in g.edge_ids}; chosen,rows,target_sgns=_group_rank_basis(signatures,rep_groups,chain_signs); basis=_complete_basis(signatures,chosen,rows,rep_ids); targets=[LinearEnergyExpr.zero() for _ in range(n_internal)]
-    for e,s in zip(chosen,target_sgns): targets[e]=LinearEnergyExpr.E(e,s)
-    for e in basis:
-        if targets[e].render()=='0': targets[e]=LinearEnergyExpr.E(e,1)
-    loop_exprs=solve_loop_energy_from_target_edge_exprs(signatures,basis,targets,n_external_symbols); edge_exprs=list(edge_q0_from_loop_exprs(signatures,loop_exprs,n_external_symbols))
-    for g in rep_groups:
-        for eid in g.edge_ids:
-            if int(edge_signs[eid])!=0: edge_exprs[eid]=LinearEnergyExpr.E(eid,int(edge_signs[eid]))
-    return loop_exprs,tuple(edge_exprs),tuple(basis)
-def _skeleton_surfaces(signatures,rep_groups,edge_exprs,sb,basis=()):
-    rep_ids={e for g in rep_groups for e in g.edge_ids}; basis_ids=set(int(x) for x in basis); out=[]
-    for eid,expr in enumerate(edge_exprs):
-        if eid in rep_ids or eid in basis_ids: continue
-        out.append(sb.intern('auto', expr-LinearEnergyExpr.E(eid,1), f'hybrid-skeleton-{eid}-minus'))
-        out.append(sb.intern('auto', expr+LinearEnergyExpr.E(eid,1), f'hybrid-skeleton-{eid}-plus'))
-    return tuple(out)
-
-def _local_repeated_surfaces(rep_groups,edge_signs,chain_signs,sb):
-    out=[]
-    for g,chi in zip(rep_groups,chain_signs):
-        anchor=g.edge_ids[0]
-        for eid in g.edge_ids[1:]:
-            if int(edge_signs[eid]) != int(chi):
-                out.append(sb.intern('auto', LinearEnergyExpr.E(anchor,int(chi)) - LinearEnergyExpr.E(eid,int(edge_signs[eid])), f'local-repeat-{anchor}-{eid}'))
-    return tuple(out)
-
-def _unit_ray(n,index):
-    return tuple(1 if i==index else 0 for i in range(n))
-
-def _ray_rank(rays):
-    return _rank(rays)
-
-def _embedded_cones(cones,keep,n):
-    out=[]
-    for coeff,rays in cones:
-        embedded=[]
-        for ray in rays:
-            full=[0]*n
-            for local_idx,global_idx in enumerate(keep):
-                full[global_idx]=int(ray[local_idx])
-            embedded.append(tuple(full))
-        out.append((coeff,tuple(embedded)))
-    return out
-
-def _equality_facet_cones(same,opposite,n):
-    same=list(same); opposite=list(opposite)
-    if not same or not opposite:
-        return []
-    paths=[]
-    def rec(i,j,path):
-        path=path+[(i,j)]
-        if i==len(same)-1 and j==len(opposite)-1:
-            paths.append(path); return
-        if i<len(same)-1: rec(i+1,j,path)
-        if j<len(opposite)-1: rec(i,j+1,path)
-    rec(0,0,[])
-    out=[]
-    for path in paths:
-        rays=[]
-        for i,j in path:
-            ray=[0]*n
-            ray[same[i]]=1
-            ray[opposite[j]]=1
-            rays.append(tuple(ray))
-        out.append((1,tuple(rays)))
-    return out
-
-def _det_int(rows):
-    return int(_det_fraction(rows))
-
-def _cone_from_rays(rays):
-    rays=tuple(tuple(int(x) for x in ray) for ray in rays)
-    det=abs(_det_int(rays))
-    if det == 0:
-        return ()
-    return ((det,rays),)
-
-def _halfspace_cone_simplices_dim4(same,opposite):
-    n=4; same=tuple(same); opposite=tuple(opposite)
-    def e(i): return _unit_ray(n,i)
-    def pair(a,b):
-        ray=[0]*n; ray[int(a)]=1; ray[int(b)]=1
-        return tuple(ray)
-    m=len(same); p=len(opposite)
-    if p == 1:
-        p0=opposite[0]
-        return _cone_from_rays((e(p0),)+tuple(pair(a,p0) for a in same))
-    if m == 1 and p == 3:
-        a=same[0]; p0,p1,p2=opposite
-        cones=[
-            (pair(a,p2), e(p0), e(p1), e(p2)),
-            (pair(a,p0), pair(a,p2), e(p0), e(p1)),
-            (pair(a,p0), pair(a,p2), pair(a,p1), e(p1)),
-        ]
-        out=[]
-        for rays in cones:
-            out.extend(_cone_from_rays(rays))
-        return tuple(out)
-    if m == 2 and p == 2:
-        a0,a1=same; p0,p1=opposite
-        cones=[
-            (pair(a0,p0), pair(a1,p0), e(p1), e(p0)),
-            (pair(a0,p1), pair(a0,p0), pair(a1,p0), e(p1)),
-            (pair(a0,p1), pair(a1,p1), pair(a1,p0), e(p1)),
-        ]
-        out=[]
-        for rays in cones:
-            out.extend(_cone_from_rays(rays))
-        return tuple(out)
-    raise ValueError(f'Unsupported four-dimensional halfspace split {m}+{p}')
-
-def _halfspace_cone_simplices(same,opposite,n):
-    same=tuple(sorted(int(x) for x in same)); opposite=tuple(sorted(int(x) for x in opposite))
-    if not same:
-        return [(1,tuple(_unit_ray(n,i) for i in range(n)))]
-    if not opposite:
-        return []
-    if n == 4:
-        return _halfspace_cone_simplices_dim4(same,opposite)
-    if n==1:
-        return []
-    r0=[1]*n
-    for i in opposite:
-        r0[i]=len(same)+1
-    r0=tuple(r0)
-    boundary=[]
-    for removed in range(n):
-        keep=[i for i in range(n) if i!=removed]
-        sub_same=[keep.index(i) for i in same if i!=removed]
-        sub_opposite=[keep.index(i) for i in opposite if i!=removed]
-        sub=_halfspace_cone_simplices(sub_same,sub_opposite,n-1)
-        for coeff,rays in _embedded_cones(sub,keep,n):
-            if len(rays)==n-1 and _ray_rank(rays)==n-1:
-                boundary.append((coeff,rays))
-    boundary.extend(_equality_facet_cones(same,opposite,n))
-    out=[]; seen=set()
-    for coeff,rays in boundary:
-        full=(r0,)+tuple(rays)
-        if len(full)!=n or _ray_rank(full)!=n:
-            continue
-        det=abs(_det_int(full))
-        if det==0:
-            continue
-        key=tuple(sorted(full))
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append((coeff*det,full))
-    return out
-
-def _linear_combo_expr(coeffs,exprs):
-    out=LinearEnergyExpr.zero()
-    for c,expr in zip(coeffs,exprs):
-        if int(c):
-            out=out+expr.mul(int(c))
-    return out.canonical()
-
-def _local_repeated_cone_terms(rep_group,edge_signs,chain_sign,channel_expr,sb):
-    edge_ids=tuple(rep_group.edge_ids); rels=tuple(int(x) for x in rep_group.rel_signs)
-    chi=int(chain_sign); anchor=edge_ids[0]; canonical_signs=[rels[i]*int(edge_signs[eid]) for i,eid in enumerate(edge_ids)]
-    same=[i for i,s in enumerate(canonical_signs) if int(s)==chi]
-    opposite=[i for i,s in enumerate(canonical_signs) if int(s)==-chi]
-    cones=_halfspace_cone_simplices(same,opposite,len(edge_ids))
-    a_exprs=[]
-    for eid,s in zip(edge_ids,canonical_signs):
-        a_exprs.append((LinearEnergyExpr.E(eid,1)-channel_expr.mul(int(s))).canonical())
-    out=[]
-    for coeff,rays in cones:
-        chain=[]
-        for ray in rays:
-            expr=_linear_combo_expr(ray,a_exprs)
-            chain.append(sb.intern('auto',expr,f'local-cone-{anchor}-{orientation_id_from_signs(canonical_signs)}-{chi}'))
-        out.append((int(coeff)*((-1)**len(edge_ids)),tuple(chain)))
-    agg={}
-    for coeff,chain in out:
-        agg[chain]=agg.get(chain,0)+int(coeff)
-    return tuple((coeff,chain) for chain,coeff in agg.items() if coeff)
-
-def _local_repeated_cone_product(rep_groups,edge_signs,chain_signs,channel_exprs,sb):
-    acc=[(1,tuple())]
-    for group,chi,channel_expr in zip(rep_groups,chain_signs,channel_exprs):
-        group_terms=_local_repeated_cone_terms(group,edge_signs,chi,channel_expr,sb)
-        nxt=[]
-        for coeff_a,chain_a in acc:
-            for coeff_b,chain_b in group_terms:
-                nxt.append((coeff_a*coeff_b,chain_a+chain_b))
-        acc=nxt
-    agg={}
-    for coeff,chain in acc:
-        agg[chain]=agg.get(chain,0)+int(coeff)
-    return tuple((coeff,chain) for chain,coeff in agg.items() if coeff)
-
-def _invert_fraction_matrix(rows):
-    n=len(rows); A=[[Fraction(x) for x in row] for row in rows]; I=[[Fraction(int(i==j)) for j in range(n)] for i in range(n)]
-    for col in range(n):
-        piv=None
-        for r in range(col,n):
-            if A[r][col] != 0:
-                piv=r; break
-        if piv is None:
-            raise ValueError('singular matrix')
-        if piv != col:
-            A[col],A[piv]=A[piv],A[col]; I[col],I[piv]=I[piv],I[col]
-        pv=A[col][col]
-        A[col]=[x/pv for x in A[col]]; I[col]=[x/pv for x in I[col]]
-        for r in range(n):
-            if r==col: continue
-            fac=A[r][col]
-            if fac:
-                A[r]=[a-fac*b for a,b in zip(A[r],A[col])]
-                I[r]=[a-fac*b for a,b in zip(I[r],I[col])]
-    return I
-
-def _complete_hybrid_energy_basis(signatures,rep_groups):
-    n_loops=len(signatures[0][0]); rows=[]; independent_groups=[]
-    for idx,group in enumerate(rep_groups):
-        row=list(group.key[0][0])
-        if _rank(rows+[row])>_rank(rows):
-            rows.append(row); independent_groups.append(idx)
-    for i in range(n_loops):
-        row=[0]*n_loops; row[i]=1
-        if _rank(rows+[row])>_rank(rows):
-            rows.append(row)
-        if len(rows)==n_loops:
-            break
-    if len(rows)!=n_loops:
-        raise ValueError('Could not complete hybrid energy basis')
-    return tuple(tuple(int(x) for x in row) for row in rows),tuple(independent_groups)
-
-def _loop_coeffs_in_energy_basis(loop_coeffs,basis_rows):
-    inv=_invert_fraction_matrix(basis_rows)
-    out=[]
-    for col in range(len(basis_rows)):
-        val=sum(Fraction(loop_coeffs[i])*inv[i][col] for i in range(len(basis_rows)))
-        out.append(val)
-    return tuple(out)
-
-def _fraction_to_generator_number(x):
-    x=Fraction(x)
-    if x.denominator==1:
-        return int(x)
-    return float(x)
-
-def _canonical_group_exprs(rep_groups,loop_exprs,n_external):
-    out=[]
-    for group in rep_groups:
-        out.append(edge_q0_from_loop_exprs((group.key[0],),loop_exprs,n_external)[0])
-    return tuple(out)
 
 def _build_coupled_cff_hybrid_bundle(parsed, reason):
     cff=build_pure_cff_bundle(parsed)
@@ -669,78 +384,12 @@ def _build_coupled_cff_hybrid_bundle(parsed, reason):
         ))
     return ExpressionBundle('hybrid',cff.loop_names,cff.ext_names,cff.signatures,cff.surface_cache,tuple(hybrid_terms))
 
-def _fixed_tau_local_cone_supported(signatures,rep_groups):
-    # The factorized fixed-tau implementation below has been validated for a
-    # single loop-energy variable.  In multi-loop graphs the Fourier closure
-    # signs are linear combinations of the repeated-sector tau sums; treating
-    # each repeated group as an independent local cone misses coupled residues.
-    return len(signatures[0][0]) == 1
-
-def _build_fixed_tau_local_hybrid_bundle(parsed):
-    rep_groups=repeated_groups(parsed); signatures=tuple(e.signature for e in parsed.internal_edges); n_external=len(parsed.ext_names)
-    if not rep_groups:
-        ltd=build_pure_ltd_bundle(signatures,n_external); return ExpressionBundle('hybrid',ltd.loop_names,ltd.ext_names,ltd.signatures,ltd.surface_cache,ltd.terms)
-    sb=SurfaceCacheBuilder(); terms=[]; bc=0; rep_ids={e for g in rep_groups for e in g.edge_ids}
-    nonrep_edges=[eid for eid in range(len(signatures)) if eid not in rep_ids]
-    energy_basis,independent_group_indices=_complete_hybrid_energy_basis(signatures,rep_groups)
-    transformed_nonrep=[
-        tuple(_fraction_to_generator_number(x) for x in _loop_coeffs_in_energy_basis(signatures[eid][0],energy_basis))
-        for eid in nonrep_edges
-    ]
-    group_sign_choices=[list(itertools.product([-1,1],repeat=len(g.edge_ids))) for g in rep_groups]
-    for group_edge_signs in itertools.product(*group_sign_choices):
-        edge_signs=[0]*len(signatures); canonical_group_signs=[]
-        for group,signs in zip(rep_groups,group_edge_signs):
-            vals=[]
-            for eid,rel,sign in zip(group.edge_ids,group.rel_signs,signs):
-                edge_signs[eid]=int(sign); vals.append(int(rel)*int(sign))
-            canonical_group_signs.append(vals)
-        chain_choices=[_chain_choices(vals) for vals in canonical_group_signs]
-        for chain_signs in itertools.product(*chain_choices):
-            closure=[CLOSE_BELOW]*len(energy_basis)
-            for basis_pos,group_idx in enumerate(independent_group_indices):
-                closure[basis_pos]=CLOSE_BELOW if int(chain_signs[group_idx])>0 else CLOSE_ABOVE
-            residues=CutStructureGenerator(transformed_nonrep).get_residues(closure,simplify=True)
-            for residue in residues:
-                residual_basis=tuple(nonrep_edges[int(i)] for i in residue['basis'])
-                cut_signs=[int(s) for s in residue['sigmas']]
-                loop_exprs,edge_exprs_base=solve_loop_energy_substitutions(signatures,residual_basis,cut_signs,n_external)
-                edge_exprs=list(edge_exprs_base)
-                for group in rep_groups:
-                    for eid in group.edge_ids:
-                        edge_exprs[eid]=LinearEnergyExpr.E(eid,int(edge_signs[eid]))
-                edge_exprs=tuple(edge_exprs)
-                channel_exprs=_canonical_group_exprs(rep_groups,loop_exprs,n_external)
-                skeleton=_skeleton_surfaces(signatures,rep_groups,edge_exprs,sb,residual_basis)
-                residue_sign=1 if float(residue['sign']) > 0 else -1
-                orient_edge_signs=list(edge_signs)
-                for eid,sign in zip(residual_basis,cut_signs):
-                    orient_edge_signs[eid]=int(sign)
-                for cone_coeff,cone_chain in _local_repeated_cone_product(rep_groups,edge_signs,chain_signs,channel_exprs,sb):
-                    chain=tuple(skeleton)+tuple(cone_chain)
-                    half_edges=tuple(sorted(set(residual_basis)|rep_ids))
-                    terms.append(OrientationTerm(
-                        _label_with_chain(orient_edge_signs,chain_signs),
-                        'hybrid',
-                        bc,
-                        tuple(orient_edge_signs),
-                        int(residue_sign*cone_coeff),
-                        half_edges,
-                        chain,
-                        loop_exprs,
-                        edge_exprs,
-                        {'basis':list(residual_basis),'cut_signs':cut_signs,'chain_signs':list(chain_signs),'energy_basis':[list(r) for r in energy_basis],'source':'hybrid_ltd_local_cone','repeated_groups':[list(g.edge_ids) for g in rep_groups]},
-                    )); bc+=1
-    return ExpressionBundle('hybrid',tuple(),tuple(),signatures,sb.build(),tuple(terms))
-
 def build_hybrid_bundle_raw(parsed):
     rep_groups=repeated_groups(parsed); signatures=tuple(e.signature for e in parsed.internal_edges)
     if not rep_groups:
         ltd=build_pure_ltd_bundle(signatures,len(parsed.ext_names))
         return ExpressionBundle('hybrid',ltd.loop_names,ltd.ext_names,ltd.signatures,ltd.surface_cache,ltd.terms)
-    if _fixed_tau_local_cone_supported(signatures,rep_groups):
-        return _build_fixed_tau_local_hybrid_bundle(parsed)
-    return _build_coupled_cff_hybrid_bundle(parsed,'multi_loop_repeated_tau_closures_are_coupled')
+    return _build_coupled_cff_hybrid_bundle(parsed,'general_repeated_channel_cff_cone')
 
 def edge_spatial_momentum(signature, loop_spatial_momenta, external_momenta):
     loop_coeffs, ext_coeffs=signature; x=y=z=mp.mpf(0)

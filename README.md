@@ -26,10 +26,10 @@ Build and inspect the hybrid structure:
 
 ```bash
 python hybrid3d.py build --family hybrid --dot examples/box_pow3.dot --pretty
-python hybrid3d.py build --family hybrid --dot examples/box_pow3.dot --pretty --show-details-for-orientation '000+--|+'
+python hybrid3d.py build --family hybrid --dot examples/box_pow3.dot --pretty --show-details-for-orientation '+-----|coupled'
 ```
 
-The orientation label before `|` is the edge-orientation string on the original internal edges.  The marker after `|` is the chain sign for each repeated channel group, ordered by the minimum edge id in each repeated group.
+The orientation label before `|` is the edge-orientation string on the original internal edges.  For repeated-channel graphs the marker after `|` is `coupled`, indicating that the repeated sector is evaluated with the general coupled CFF-cone kernel.
 
 Export JSON:
 
@@ -90,11 +90,11 @@ PYTHONPATH=/opt/pyvenv/lib/python3.13/site-packages:. \
 /opt/pyvenv/bin/python -S -m pytest -q tests
 ```
 
-The tests emphasize graph validation, family-distinct structures, JSON-driven evaluation, mutation sensitivity of substitution maps and skeleton surfaces, edge-by-edge dot-product numerator checks, and three-way CFF/hybrid/split-mass LTD diagnostics on every valid example topology.
+The tests emphasize graph validation, family-distinct structures, JSON-driven evaluation, mutation sensitivity of substitution maps and skeleton surfaces, unit energy coefficients in exported surfaces, edge-by-edge dot-product numerator checks, and three-way CFF/hybrid/split-mass LTD diagnostics on every valid example topology.
 
 ## Current status
 
-The package is an actively evolving research prototype.  The current hybrid JSON tree includes the LTD skeleton surfaces as evaluated denominator factors and stores repeated-edge substitution maps separately.  See `docs/hybrid_current_status.pdf` for the theoretical and implementation summary.
+The package is an actively evolving research prototype.  The current hybrid JSON tree stores the coupled CFF-cone denominator factors and the per-orientation edge substitution maps used by the evaluator.  See `docs/hybrid_3d.pdf` for the theoretical and implementation summary.
 
 
 ## v12 status note
@@ -108,4 +108,4 @@ For CFF surfaces, external shifts are inferred from the internal momentum routin
 
 The `test` subcommand reports a three-way numerical diagnostic.  It now always evaluates the exported CFF JSON and hybrid JSON directly, and reports the split-mass LTD sequence as an independent limiting reference.  Optional `--cff-json` and `--hybrid-json` inputs can be supplied to make the diagnostic use prebuilt JSON instead of rebuilding both structures.
 
-The CFF tree generator expands all acyclic contractions of the selected source/sink boundary, so non-simplicial orientations are represented as genuine sums in the JSON tree.  For one-loop repeated-channel graphs the hybrid backend uses the fixed-tau LTD/local-cone construction.  For multi-loop repeated-channel graphs the repeated-sector tau closures are coupled; the backend therefore uses the coupled CFF-cone kernel with a separate hybrid orientation namespace rather than the invalid factorized local-cone formula.  Graphs without repeated channels still collapse to the ordinary LTD bundle.
+The CFF tree generator expands all acyclic contractions of the selected source/sink boundary, so non-simplicial orientations are represented as genuine sums in the JSON tree.  All repeated-channel graphs, including the dotted box, now use the coupled CFF-cone kernel with a separate hybrid orientation namespace.  This keeps repeated copies as separate edge labels and avoids artificial H- or E-surfaces with internal-energy coefficients such as `2*OSE[i]`; repeated-copy sums are represented as `OSE[i] + OSE[j]`.  Graphs without repeated channels still collapse to the ordinary LTD bundle.

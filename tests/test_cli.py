@@ -39,15 +39,25 @@ def test_cff_box_contains_nontrivial_contraction_branch():
         for node in orient['tree']['nodes']
     )
 
-def test_hybrid_repeated_box_uses_local_cone_labels():
+def test_hybrid_repeated_box_uses_coupled_cone_kernel():
     data = build_structure(dot('box_pow3.dot'), 'hybrid')
-    assert any('|' in o['orient_label'] for o in data['orientations'])
-    assert all(o['meta']['source'] == 'hybrid_ltd_local_cone' for o in data['orientations'])
+    assert any(o['orient_label'].endswith('|coupled') for o in data['orientations'])
+    assert all(o['meta']['source'] == 'hybrid_coupled_cff_cone_kernel' for o in data['orientations'])
+    assert all(o['meta']['coupled_reason'] == 'general_repeated_channel_cff_cone' for o in data['orientations'])
 
-def test_multiloop_hybrid_uses_coupled_cone_kernel():
+def test_multiloop_hybrid_uses_same_coupled_cone_kernel():
     data = build_structure(dot('sunrise_pow4.dot'), 'hybrid')
     assert any(o['orient_label'].endswith('|coupled') for o in data['orientations'])
     assert all(o['meta']['source'] == 'hybrid_coupled_cff_cone_kernel' for o in data['orientations'])
+
+def test_hybrid_surfaces_have_unit_energy_coefficients():
+    for path in (ROOT/'examples').glob('*.dot'):
+        if path.name == 'noisy_example.dot':
+            continue
+        data = build_structure(dot(path.name), 'hybrid')
+        for surface in data['surfaces']:
+            assert all(abs(int(coeff)) == 1 for _, coeff in surface['e'].get('i', [])), (path.name, surface)
+            assert all(abs(int(coeff)) == 1 for _, coeff in surface['e'].get('x', [])), (path.name, surface)
 
 def test_json_evaluator_consumes_surface_tree_and_substitution_map():
     d = dot('box_pow3.dot')
