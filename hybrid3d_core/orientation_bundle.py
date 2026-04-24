@@ -7,6 +7,7 @@ import itertools
 import mpmath as mp
 
 from .graph_io import ParsedGraph, ParsedGraphExternalEdge, repeated_groups, _strip_quotes
+from .ltd_cut_structure_generator import CutStructureGenerator, CLOSE_BELOW
 
 Signature = Tuple[Tuple[int, ...], Tuple[int, ...]]
 ThreeVector = Tuple[float, float, float]
@@ -240,6 +241,15 @@ def solve_loop_energy_substitutions(signatures,basis,cut_signs,n_external):
 
 def signed_on_shell_edge_exprs(signs,n_internal,n_external): return tuple(LinearEnergyExpr.E(i,int(s)) for i,s in enumerate(signs))
 
+def _duplicate_signature_excess(signatures):
+    counts={}
+    for sig in signatures:
+        loop,ext=sig
+        neg=(tuple(-x for x in loop), tuple(-x for x in ext))
+        key=(loop,ext) if (loop,ext) <= neg else neg
+        counts[key]=counts.get(key,0)+1
+    return sum(v-1 for v in counts.values() if v>1)
+
 def _node_to_internal_id(name: str, parsed: ParsedGraph) -> Optional[int]: return parsed.node_name_to_internal.get(_strip_quotes(name).split(':',1)[0])
 def build_base_graph_from_parsed(parsed: ParsedGraph) -> CFFGenerationGraphPy:
     n_vertices=max(parsed.node_name_to_internal.values())+1 if parsed.node_name_to_internal else 0
@@ -312,7 +322,7 @@ def _enumerate_cff_branches(graph,surface_builder,parsed,branch_acc):
 
 def build_pure_cff_bundle(parsed):
     n_internal=len(parsed.internal_edges); signatures=tuple(e.signature for e in parsed.internal_edges); n_external=len(parsed.ext_names); basis=choose_basis_indices(signatures); sb=SurfaceCacheBuilder(); base=build_base_graph_from_parsed(parsed); terms=[]; bc=0
-    overall_sign=-1 if len(signatures[0][0]) % 2 else 1
+    overall_sign=-1 if (len(signatures[0][0])-1+_duplicate_signature_excess(signatures)) % 2 else 1
     for bitmask in range(1<<n_internal):
         graph=base.clone(); signs=[1]*n_internal
         for edge_index in range(n_internal):
@@ -348,11 +358,10 @@ def _det_fraction(rows):
 
 def build_pure_ltd_bundle(signatures,n_external_symbols=None):
     n_internal=len(signatures); n_loops=len(signatures[0][0]); n_external_symbols=n_external_symbols if n_external_symbols is not None else len(signatures[0][1]); sb=SurfaceCacheBuilder(); terms=[]; bc=0
-    for basis in itertools.combinations(range(n_internal), n_loops):
-        rows=[[signatures[e][0][i] for i in range(n_loops)] for e in basis]
-        det=_det_fraction(rows)
-        if det == 0: continue
-        cut_signs=[1]*n_loops
+    residues=CutStructureGenerator([sig[0] for sig in signatures]).get_residues([CLOSE_BELOW]*n_loops, simplify=True)
+    for residue in residues:
+        basis=tuple(int(e) for e in residue['basis'])
+        cut_signs=[int(s) for s in residue['sigmas']]
         loop_exprs,edge_exprs=solve_loop_energy_substitutions(signatures,basis,cut_signs,n_external_symbols); chain=[]
         for edge_index,expr in enumerate(edge_exprs):
             if edge_index in basis: continue
@@ -360,7 +369,7 @@ def build_pure_ltd_bundle(signatures,n_external_symbols=None):
             chain.append(sb.intern('auto', expr+LinearEnergyExpr.E(edge_index,1), f'dual-{edge_index}-plus'))
         edge_orient=[0]*n_internal
         for e,s in zip(basis,cut_signs): edge_orient[e]=int(s)
-        pref=1 if det > 0 else -1
+        pref=1 if float(residue['sign']) > 0 else -1
         terms.append(OrientationTerm(orientation_id_from_signs(edge_orient),'pure_ltd',bc,tuple(edge_orient),pref,tuple(basis),tuple(chain),loop_exprs,edge_exprs,{'basis':list(basis),'cut_signs':cut_signs,'source':'canonical_ltd_residue'})); bc+=1
     return ExpressionBundle('pure_ltd',tuple(),tuple(),tuple(signatures),sb.build(),tuple(terms))
 def _label_with_chain(edge_signs, chain_signs): return orientation_id_from_signs(edge_signs)+('|' + orientation_id_from_signs(chain_signs) if chain_signs else '')

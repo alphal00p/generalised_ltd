@@ -2,6 +2,7 @@ import json, pathlib, math
 import pytest
 
 from hybrid3d_core.api import load_dot_graph, validate_graph, build_structure, evaluate_structure, compare_three_modes, run_test
+from hybrid3d_core import graph_io as GIO
 from hybrid3d_core.structure import numerator_from_expr
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -109,3 +110,23 @@ def test_three_way_report_runs_for_every_valid_example(name, numerator):
     assert len(rep['split_ltd']) == 4
     assert all(math.isfinite(float(item['value'])) for item in rep['split_ltd'])
     assert 'split_ltd_proxy' in rep
+
+@pytest.mark.parametrize('name', [
+    'box_pow3.dot',
+    'sunrise_pow4.dot',
+    'kite_double_nested_repeats.dot',
+    'kite_nested_repeats.dot',
+    'kite_sandwich_repeats.dot',
+    'proper_iterated_sandwiched_bubble.dot',
+    'mercedes_multi_repeats.dot',
+])
+def test_split_mass_pure_cff_matches_split_mass_pure_ltd_for_every_valid_example(name):
+    d = dot(name)
+    parsed = GIO.parse_dot_graph(d)
+    ext4, loop3, default_masses = __import__('hybrid3d_core.api').api._random_default_inputs(d, 1337)
+    masses = {**default_masses, **ALL_MASSES}
+    split_dot, _ = GIO.build_split_mass_dot(d)
+    split_masses = GIO.build_split_mass_assignments(parsed, masses, 1e-3)
+    cff = evaluate_structure(build_structure(split_dot, 'cff'), split_dot, ext4, loop3, '1', 70, split_masses)
+    ltd = evaluate_structure(build_structure(split_dot, 'ltd'), split_dot, ext4, loop3, '1', 70, split_masses)
+    assert abs(cff - ltd) < 1e-50
