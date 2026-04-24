@@ -90,7 +90,7 @@ PYTHONPATH=/opt/pyvenv/lib/python3.13/site-packages:. \
 /opt/pyvenv/bin/python -S -m pytest -q tests
 ```
 
-The tests emphasize graph validation, family-distinct structures, JSON-driven evaluation, mutation sensitivity of substitution maps and skeleton surfaces, unit energy coefficients in exported surfaces, edge-by-edge dot-product numerator checks, and three-way CFF/hybrid/split-mass LTD diagnostics on every valid example topology.
+The tests emphasize graph validation, family-distinct structures, JSON-driven evaluation, mutation sensitivity of substitution maps and skeleton surfaces, unit energy coefficients in exported surfaces, edge-by-edge dot-product numerator checks, and three-way CFF/hybrid/split-mass LTD diagnostics on every valid example topology.  The five `five_loop_ultimate_basis*.dot` fixtures encode the same 5-loop graph in different loop-momentum bases; the slow alignment test transforms a fixed physical loop assignment into each basis and checks that all five representations give the same CFF/hybrid value while the split-mass LTD sequence converges to it.
 
 ## Current status
 

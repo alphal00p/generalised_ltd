@@ -1,0 +1,33 @@
+digraph G {
+rankdir=LR;
+L [label=L, shape=circle];
+R [label=R, shape=circle];
+B1 [label=B1, shape=circle];
+B2 [label=B2, shape=circle];
+B3 [label=B3, shape=circle];
+B4 [label=B4, shape=circle];
+K0 [label=K0, shape=circle];
+K1 [label=K1, shape=circle];
+K2 [label=K2, shape=circle];
+ext_p1 [label=p1, shape=box];
+ext_p2 [label=p2, shape=box];
+ext_p3 [label=p3, shape=box];
+ext_p4 [label=p4, shape=box];
+L -> B1 [label="k1 + p1", fontsize=10, mass="mR4"];
+B1 -> B2 [label="k1 + p1", fontsize=10, mass="mR4"];
+B2 -> B3 [label="k2 + p4", fontsize=10, mass="mB1"];
+B2 -> B3 [label="k1 - k2 + p1 - p4", fontsize=10, mass="mB2"];
+B3 -> B4 [label="k1 + p1", fontsize=10, mass="mR4"];
+B4 -> R [label="k1 + p1", fontsize=10, mass="mR4"];
+L -> K0 [label="k3 + p2", fontsize=10, mass="mR3"];
+K0 -> K1 [label="k4 + p3", fontsize=10, mass="mK1"];
+K0 -> K1 [label="k5 + p4", fontsize=10, mass="mK2"];
+K0 -> K1 [label="k3 - k4 - k5 + p2 - p3 - p4", fontsize=10, mass="mK3"];
+K1 -> K2 [label="k3 + p2", fontsize=10, mass="mR3"];
+K2 -> R [label="k3 + p2", fontsize=10, mass="mR3"];
+R -> L [label="k1 + k3 + p1 + p2", fontsize=10, mass="mRet"];
+ext_p1 -> L [label=p1, fontsize=10, style=dashed];
+L -> ext_p2 [label="-p2", fontsize=10, style=dashed];
+ext_p3 -> K0 [label=p3, fontsize=10, style=dashed];
+R -> ext_p4 [label="-p4", fontsize=10, style=dashed];
+}

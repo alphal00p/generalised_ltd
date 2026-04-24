@@ -1,5 +1,7 @@
 import json, pathlib, math
+from fractions import Fraction
 import pytest
+import mpmath as mp
 
 from hybrid3d_core.api import load_dot_graph, validate_graph, build_structure, evaluate_structure, compare_three_modes, run_test
 from hybrid3d_core import graph_io as GIO
@@ -10,9 +12,97 @@ BOX_MASSES = {"m1":0.8,"m2":1.1,"m3":0.9,"m4":1.2}
 ITER_MASSES = {"mA":0.8,"mB":0.9,"mC":1.1,"mD":0.75,"mE":1.0,"mF":0.6}
 MERC_MASSES = {"mA":0.95,"mB":1.05,"mC":0.85,"mD":0.9,"mE":1.0,"mF":1.1}
 ALL_MASSES = {**BOX_MASSES, **ITER_MASSES, **MERC_MASSES}
+ULTIMATE_MASSES = {
+    "mR4": "1.11",
+    "mR3": "0.93",
+    "mB1": "0.71",
+    "mB2": "1.23",
+    "mK1": "0.82",
+    "mK2": "1.06",
+    "mK3": "0.88",
+    "mRet": "1.17",
+}
+ULTIMATE_BASIS_MATRICES = {
+    "five_loop_ultimate_basis1.dot": (
+        (1, 0, 0, 0, 0),
+        (0, 1, 0, 0, 0),
+        (0, 0, 1, 0, 0),
+        (0, 0, 0, 1, 0),
+        (0, 0, 0, 0, 1),
+    ),
+    "five_loop_ultimate_basis2.dot": (
+        (1, 1, 0, 0, 0),
+        (0, 1, 0, 0, 0),
+        (0, 0, 1, 0, 0),
+        (0, 0, 0, 1, 0),
+        (0, 0, 0, 0, 1),
+    ),
+    "five_loop_ultimate_basis3.dot": (
+        (1, 0, 0, 0, 0),
+        (0, 1, 0, 0, 0),
+        (0, 0, 1, 1, 1),
+        (0, 0, 0, 1, 0),
+        (0, 0, 0, 0, 1),
+    ),
+    "five_loop_ultimate_basis4.dot": (
+        (1, 1, 0, 0, 0),
+        (0, 1, 0, 0, 0),
+        (0, 0, 1, 1, 1),
+        (0, 0, 0, 1, 0),
+        (0, 0, 0, 0, 1),
+    ),
+    "five_loop_ultimate_basis5.dot": (
+        (1, 1, 0, 0, 0),
+        (0, 1, 0, 0, 0),
+        (-1, -1, 1, 1, 1),
+        (0, 0, 0, 1, 0),
+        (0, 0, 0, 0, 1),
+    ),
+}
+ULTIMATE_EXT4 = (
+    ("0.37", "0.11", "-0.07", "0.05"),
+    ("-0.21", "0.04", "0.13", "-0.09"),
+    ("0.18", "-0.08", "0.02", "0.14"),
+    ("-0.09", "0.06", "-0.11", "0.03"),
+)
+ULTIMATE_CANONICAL_LOOP3 = (
+    ("0.07", "-0.04", "0.09"),
+    ("-0.05", "0.08", "0.02"),
+    ("0.03", "0.06", "-0.07"),
+    ("0.11", "-0.02", "0.04"),
+    ("-0.06", "-0.03", "0.10"),
+)
 
 def dot(name):
     return load_dot_graph(str(ROOT/'examples'/name))
+
+def _solve_loop_basis(matrix, canonical_loop3):
+    n = len(matrix)
+    per_dim = []
+    base_matrix = [[Fraction(x) for x in row] for row in matrix]
+    for dim in range(3):
+        A = [row[:] for row in base_matrix]
+        rhs = [Fraction(str(canonical_loop3[i][dim])) for i in range(n)]
+        for col in range(n):
+            pivot = next(row for row in range(col, n) if A[row][col])
+            if pivot != col:
+                A[col], A[pivot] = A[pivot], A[col]
+                rhs[col], rhs[pivot] = rhs[pivot], rhs[col]
+            pv = A[col][col]
+            A[col] = [x / pv for x in A[col]]
+            rhs[col] /= pv
+            for row in range(n):
+                if row == col:
+                    continue
+                factor = A[row][col]
+                if factor:
+                    A[row] = [a - factor * b for a, b in zip(A[row], A[col])]
+                    rhs[row] -= factor * rhs[col]
+        per_dim.append(rhs)
+    return tuple(tuple(str(per_dim[dim][i]) for dim in range(3)) for i in range(n))
+
+def _all_edge_external_numerator(n_edges, n_external=4):
+    return ' + '.join(f'dot(edges[{i}], ext[{i % n_external}])' for i in range(n_edges))
 
 def test_validate_all_examples_except_noisy():
     for path in (ROOT/'examples').glob('*.dot'):
@@ -109,6 +199,45 @@ def test_mercedes_build_and_test_runs():
     assert any('|' in o['orient_label'] for o in data['orientations'])
     rep = run_test(d, numerator_expr='dot(edges[0], edges[3])', dps=30, mass_map=MERC_MASSES, seed=7)
     assert float(rep['abs_cff_minus_hybrid']) < 1e-25
+
+def test_ultimate_five_loop_bases_three_way_and_aligned_momenta():
+    numerator = _all_edge_external_numerator(13)
+    cff_values = []
+    for name, matrix in ULTIMATE_BASIS_MATRICES.items():
+        d = dot(name)
+        parsed = GIO.parse_dot_graph(d)
+        assert len(parsed.internal_edges) == 13
+        assert len(parsed.loop_names) == 5
+        assert len(parsed.ext_names) == 4
+        assert sorted(len(group.edge_ids) for group in GIO.repeated_groups(parsed)) == [3, 4]
+
+        loop3 = _solve_loop_basis(matrix, ULTIMATE_CANONICAL_LOOP3)
+        cff_data = build_structure(d, 'cff')
+        hybrid_data = build_structure(d, 'hybrid')
+        assert len(cff_data['orientations']) == 930
+        assert len(hybrid_data['orientations']) == 930
+
+        rep = run_test(
+            d,
+            ext4=ULTIMATE_EXT4,
+            loop3=loop3,
+            numerator_expr=numerator,
+            dps=70,
+            epsilons=('0.04', '0.02', '0.01'),
+            mass_map=ULTIMATE_MASSES,
+            cff_data=cff_data,
+            hybrid_data=hybrid_data,
+        )
+        assert mp.mpf(rep['abs_cff_minus_hybrid']) < mp.mpf('1e-60')
+
+        split_diffs = [mp.mpf(item['abs_to_hybrid']) for item in rep['split_ltd']]
+        assert split_diffs[2] < split_diffs[1] < split_diffs[0]
+        assert split_diffs[-1] < mp.mpf('1e-7')
+        assert split_diffs[-1] > mp.mpf('1e-12')
+        cff_values.append(mp.mpf(rep['cff']))
+
+    reference = cff_values[0]
+    assert max(abs(value - reference) for value in cff_values) < mp.mpf('1e-65')
 
 @pytest.mark.parametrize('name,numerator', [
     ('box_pow3.dot', 'dot(edges[0], ext[0]) + dot(edges[-1], ext[0])'),
