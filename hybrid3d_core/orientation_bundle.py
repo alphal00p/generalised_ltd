@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 import itertools
+import math
 import mpmath as mp
 
 from .graph_io import ParsedGraph, repeated_groups, _strip_quotes
@@ -156,10 +157,23 @@ class SurfaceDef:
     surface_id: int; kind: str; expr: LinearEnergyExpr; label: str
 @dataclass(frozen=True)
 class OrientationTerm:
-    orientation_id: str; family: str; branch_id: int; edge_orientations: Tuple[int,...]; prefactor_sign: int; prefactor_half_edges: Tuple[int,...]; surface_chain: Tuple[int,...]; loop_energy_exprs: Tuple[LinearEnergyExpr,...]; edge_energy_exprs: Tuple[LinearEnergyExpr,...]; meta: Dict[str,Any]
+    orientation_id: str; family: str; branch_id: int; edge_orientations: Tuple[int,...]; prefactor_sign: Any; prefactor_half_edges: Tuple[int,...]; surface_chain: Tuple[int,...]; loop_energy_exprs: Tuple[LinearEnergyExpr,...]; edge_energy_exprs: Tuple[LinearEnergyExpr,...]; meta: Dict[str,Any]
 @dataclass(frozen=True)
 class ExpressionBundle:
     family: str; loop_names: Tuple[str,...]; ext_names: Tuple[str,...]; signatures: Tuple[Signature,...]; surface_cache: Tuple[SurfaceDef,...]; terms: Tuple[OrientationTerm,...]
+
+@dataclass(frozen=True)
+class _LogicalChannel:
+    rep_edge: int
+    members: Tuple[int, ...]
+    power: int
+
+@dataclass(frozen=True)
+class _DenomFactor:
+    kind: str
+    ref_id: int
+    power: int
+    derivs: Tuple[Fraction, ...]
 
 def classify_surface_kind(expr: LinearEnergyExpr) -> str:
     coeffs=[int(c) for _,c in expr.internal_terms if int(c)!=0]
@@ -208,6 +222,24 @@ def _solve_expr_system(A_int, b):
                 rhs[r]=rhs[r]-rhs[col].mul(fac)
     return [x.canonical() for x in rhs]
 
+def _solve_fraction_system(A_int, b):
+    n=len(A_int); A=[[Fraction(x) for x in row] for row in A_int]; rhs=[Fraction(x) for x in b]
+    for col in range(n):
+        piv=None
+        for r in range(col,n):
+            if A[r][col]!=0: piv=r; break
+        if piv is None: raise ValueError('singular basis')
+        if piv != col:
+            A[col],A[piv]=A[piv],A[col]; rhs[col],rhs[piv]=rhs[piv],rhs[col]
+        pv=A[col][col]; A[col]=[x/pv for x in A[col]]; rhs[col]/=pv
+        for r in range(n):
+            if r==col: continue
+            fac=A[r][col]
+            if fac:
+                A[r]=[a-fac*bv for a,bv in zip(A[r],A[col])]
+                rhs[r]-=fac*rhs[col]
+    return rhs
+
 def choose_basis_indices(signatures):
     n_loops=len(signatures[0][0])
     for basis in itertools.combinations(range(len(signatures)), n_loops):
@@ -251,6 +283,150 @@ def _duplicate_signature_excess(signatures):
         key=(loop,ext) if (loop,ext) <= neg else neg
         counts[key]=counts.get(key,0)+1
     return sum(v-1 for v in counts.values() if v>1)
+
+def _add_const(expr: LinearEnergyExpr, value: Fraction) -> LinearEnergyExpr:
+    if not value:
+        return expr
+    return LinearEnergyExpr(expr.internal_terms, expr.external_terms, _frac_to_str(expr._const_frac()+value)).canonical()
+
+def _multi_sub(a: Sequence[int], b: Sequence[int]) -> Tuple[int, ...]:
+    return tuple(int(x)-int(y) for x,y in zip(a,b))
+
+def _multi_factorial(a: Sequence[int]) -> int:
+    out=1
+    for x in a:
+        out *= math.factorial(int(x))
+    return out
+
+def _iter_multiindices_leq(bounds: Sequence[int]):
+    bounds=tuple(int(x) for x in bounds)
+    if not bounds:
+        yield tuple()
+        return
+    ranges=[range(x+1) for x in bounds]
+    for item in itertools.product(*ranges):
+        yield tuple(int(x) for x in item)
+
+def _rising(n: int, k: int) -> int:
+    out=1
+    for i in range(int(k)):
+        out *= int(n)+i
+    return out
+
+def _logical_channels(parsed: ParsedGraph) -> Tuple[_LogicalChannel, ...]:
+    rep_groups=repeated_groups(parsed)
+    group_by_member={}
+    for group in rep_groups:
+        for edge_id in group.edge_ids:
+            group_by_member[int(edge_id)] = group
+    channels=[]
+    seen_groups=set()
+    for edge in parsed.internal_edges:
+        group=group_by_member.get(edge.edge_id)
+        if group is None:
+            channels.append(_LogicalChannel(edge.edge_id,(edge.edge_id,),1))
+            continue
+        gid=tuple(group.edge_ids)
+        if gid in seen_groups:
+            continue
+        seen_groups.add(gid)
+        channels.append(_LogicalChannel(group.edge_ids[0],tuple(int(x) for x in group.edge_ids),len(group.edge_ids)))
+    return tuple(channels)
+
+def _basis_derivative_matrices(signatures: Sequence[Signature], basis: Sequence[int]):
+    n_loops=len(signatures[0][0]); n_basis=len(basis)
+    A=[[Fraction(signatures[e][0][i]) for i in range(n_loops)] for e in basis]
+    loop_by_basis=[[Fraction(0) for _ in range(n_basis)] for _ in range(n_loops)]
+    for bpos in range(n_basis):
+        rhs=[Fraction(1 if i==bpos else 0) for i in range(n_basis)]
+        sol=_solve_fraction_system(A,rhs)
+        for loop_id, val in enumerate(sol):
+            loop_by_basis[loop_id][bpos]=val
+    edge_by_basis=[]
+    for loop_coeffs,_ in signatures:
+        row=[]
+        for bpos in range(n_basis):
+            row.append(sum(Fraction(loop_coeffs[i])*loop_by_basis[i][bpos] for i in range(n_loops)))
+        edge_by_basis.append(tuple(row))
+    return tuple(tuple(row) for row in loop_by_basis), tuple(edge_by_basis)
+
+def _factor_derivative_piece(factor: _DenomFactor, delta: Sequence[int]):
+    order=sum(int(x) for x in delta)
+    if order == 0:
+        coeff=Fraction(1)
+    else:
+        coeff=Fraction(((-1) ** order) * _rising(factor.power, order))
+        for d, a in zip(delta, factor.derivs):
+            if d and not a:
+                return None
+            if d:
+                coeff *= a ** int(d)
+    power=factor.power+order
+    if factor.kind == 'surface':
+        return coeff, tuple(), tuple([factor.ref_id] * power)
+    if factor.kind == 'cut':
+        return coeff, tuple([factor.ref_id] * power), tuple()
+    raise ValueError(f'Unknown denominator factor kind {factor.kind!r}')
+
+def _denominator_derivative_terms(factors: Sequence[_DenomFactor], gamma: Sequence[int]):
+    gamma=tuple(int(x) for x in gamma)
+    nvar=len(gamma)
+    if not factors:
+        return [(Fraction(1), tuple(), tuple())] if not any(gamma) else []
+    total_factor=Fraction(_multi_factorial(gamma))
+    accum: Dict[Tuple[Tuple[int,...], Tuple[int,...]], Fraction] = {}
+    def rec(idx: int, remaining: Tuple[int,...], coeff: Fraction, half_edges: Tuple[int,...], chain: Tuple[int,...], denom_factorial: int):
+        if idx == len(factors):
+            if any(remaining):
+                return
+            final_coeff=coeff * total_factor / denom_factorial
+            if final_coeff:
+                key=(tuple(sorted(half_edges)), chain)
+                accum[key]=accum.get(key,Fraction(0))+final_coeff
+            return
+        for delta in _iter_multiindices_leq(remaining):
+            piece=_factor_derivative_piece(factors[idx], delta)
+            if piece is None:
+                continue
+            pcoeff, phalf, pchain=piece
+            next_remaining=tuple(remaining[i]-delta[i] for i in range(nvar))
+            rec(
+                idx+1,
+                next_remaining,
+                coeff*pcoeff,
+                half_edges+phalf,
+                chain+pchain,
+                denom_factorial*_multi_factorial(delta),
+            )
+    rec(0,gamma,Fraction(1),tuple(),tuple(),1)
+    return [(coeff, half, chain) for (half,chain), coeff in accum.items() if coeff]
+
+def _shift_exprs_by_offsets(base_exprs: Sequence[LinearEnergyExpr], derivs: Sequence[Sequence[Fraction]], offsets: Sequence[Fraction]) -> Tuple[LinearEnergyExpr, ...]:
+    out=[]
+    for expr, row in zip(base_exprs, derivs):
+        shift=sum(Fraction(a)*Fraction(o) for a,o in zip(row, offsets))
+        out.append(_add_const(expr, shift))
+    return tuple(out)
+
+def _numerator_derivative_samples(beta: Sequence[int], base_loop_exprs: Sequence[LinearEnergyExpr], base_edge_exprs: Sequence[LinearEnergyExpr], loop_derivs: Sequence[Sequence[Fraction]], edge_derivs: Sequence[Sequence[Fraction]]):
+    beta=tuple(int(x) for x in beta)
+    nvar=len(beta)
+    if not any(beta):
+        return [(Fraction(1), tuple(Fraction(0) for _ in range(nvar)), tuple(base_loop_exprs), tuple(base_edge_exprs), 'n0')]
+    # The supported numerator class is affine in the EMR energy variables.  Exact
+    # first derivatives are represented by a finite central interpolation stencil.
+    # Higher numerator derivatives vanish in this class.
+    if sum(beta) != 1 or max(beta) != 1:
+        return []
+    bpos=beta.index(1)
+    out=[]
+    for offset, coeff in ((Fraction(1), Fraction(1,2)), (Fraction(-1), Fraction(-1,2))):
+        offsets=[Fraction(0) for _ in range(nvar)]
+        offsets[bpos]=offset
+        loops=_shift_exprs_by_offsets(base_loop_exprs, loop_derivs, offsets)
+        edges=_shift_exprs_by_offsets(base_edge_exprs, edge_derivs, offsets)
+        out.append((coeff, tuple(offsets), loops, edges, f'nD{bpos}{"p" if offset > 0 else "m"}'))
+    return out
 
 def _node_to_internal_id(name: str, parsed: ParsedGraph) -> Optional[int]: return parsed.node_name_to_internal.get(_strip_quotes(name).split(':',1)[0])
 def build_base_graph_from_parsed(parsed: ParsedGraph) -> CFFGenerationGraphPy:
@@ -359,37 +535,122 @@ def build_pure_ltd_bundle(signatures,n_external_symbols=None):
         terms.append(OrientationTerm(orientation_id_from_signs(edge_orient),'pure_ltd',bc,tuple(edge_orient),pref,tuple(basis),tuple(chain),loop_exprs,edge_exprs,{'basis':list(basis),'cut_signs':cut_signs,'source':'canonical_ltd_residue'})); bc+=1
     return ExpressionBundle('pure_ltd',tuple(),tuple(),tuple(signatures),sb.build(),tuple(terms))
 
-def _build_coupled_cff_hybrid_bundle(parsed, reason):
-    cff=build_pure_cff_bundle(parsed)
-    rep_groups=repeated_groups(parsed)
-    hybrid_terms=[]
-    for branch,term in enumerate(reversed(cff.terms)):
-        meta=dict(term.meta)
-        meta.update({
-            'source':'hybrid_coupled_cff_cone_kernel',
-            'coupled_reason':reason,
-            'repeated_groups':[list(g.edge_ids) for g in rep_groups],
-        })
-        hybrid_terms.append(OrientationTerm(
-            term.orientation_id + '|coupled',
-            'hybrid',
-            branch,
-            term.edge_orientations,
-            term.prefactor_sign,
-            term.prefactor_half_edges,
-            term.surface_chain,
-            term.loop_energy_exprs,
-            term.edge_energy_exprs,
-            meta,
-        ))
-    return ExpressionBundle('hybrid',cff.loop_names,cff.ext_names,cff.signatures,cff.surface_cache,tuple(hybrid_terms))
+def _build_confluent_hybrid_bundle(parsed: ParsedGraph):
+    signatures=tuple(e.signature for e in parsed.internal_edges)
+    n_internal=len(signatures)
+    n_external=len(parsed.ext_names)
+    n_loops=len(signatures[0][0])
+    channels=_logical_channels(parsed)
+    collapsed_signatures=tuple(signatures[ch.rep_edge] for ch in channels)
+    residues=CutStructureGenerator([sig[0] for sig in collapsed_signatures]).get_residues([CLOSE_BELOW]*n_loops, simplify=True)
+    repeated=[ch for ch in channels if ch.power > 1]
+    sb=SurfaceCacheBuilder()
+    terms=[]
+    branch=0
+    for residue in residues:
+        basis_logical=tuple(int(e) for e in residue['basis'])
+        cut_signs=tuple(int(s) for s in residue['sigmas'])
+        basis_orig=tuple(channels[i].rep_edge for i in basis_logical)
+        powers=tuple(channels[i].power for i in basis_logical)
+        alpha=tuple(power-1 for power in powers)
+
+        targets=[LinearEnergyExpr.zero() for _ in signatures]
+        for edge_id, sigma in zip(basis_orig, cut_signs):
+            targets[edge_id]=LinearEnergyExpr.E(edge_id, sigma)
+        loop_exprs=solve_loop_energy_from_target_edge_exprs(signatures,basis_orig,targets,n_external)
+        edge_exprs=edge_q0_from_loop_exprs(signatures,loop_exprs,n_external)
+        loop_derivs, edge_derivs=_basis_derivative_matrices(signatures,basis_orig)
+
+        edge_orient=[0]*n_internal
+        for logical_idx, sigma in zip(basis_logical, cut_signs):
+            for edge_id in channels[logical_idx].members:
+                edge_orient[edge_id]=sigma
+
+        factors: List[_DenomFactor]=[]
+        for bpos,(logical_idx,sigma,power) in enumerate(zip(basis_logical,cut_signs,powers)):
+            derivs=[Fraction(0) for _ in basis_logical]
+            derivs[bpos]=Fraction(sigma)
+            factors.append(_DenomFactor('cut', channels[logical_idx].rep_edge, int(power), tuple(derivs)))
+
+        basis_set=set(basis_logical)
+        denominator_surface_ids=[]
+        for logical_idx, channel in enumerate(channels):
+            if logical_idx in basis_set:
+                continue
+            rep=channel.rep_edge
+            q=edge_exprs[rep]
+            minus=sb.intern('auto', q-LinearEnergyExpr.E(rep,1), f'hybrid-dual-{rep}-minus')
+            plus=sb.intern('auto', q+LinearEnergyExpr.E(rep,1), f'hybrid-dual-{rep}-plus')
+            denominator_surface_ids.extend([minus, plus])
+            factors.append(_DenomFactor('surface', minus, channel.power, tuple(edge_derivs[rep])))
+            factors.append(_DenomFactor('surface', plus, channel.power, tuple(edge_derivs[rep])))
+
+        residue_sign=Fraction(1 if float(residue['sign']) > 0 else -1)
+        for sigma, order in zip(cut_signs, alpha):
+            if order % 2:
+                residue_sign *= int(sigma)
+        residue_norm=Fraction(1, _multi_factorial(alpha))
+        beta_candidates=[beta for beta in _iter_multiindices_leq(alpha) if sum(beta) <= 1]
+        active_basis=[basis_orig[i] for i,a in enumerate(alpha) if a]
+        active_edges=[
+            edge_id for edge_id,row in enumerate(edge_derivs)
+            if any(a and row[i] for i,a in enumerate(alpha))
+        ]
+        for beta in beta_candidates:
+            gamma=_multi_sub(alpha,beta)
+            leibniz=Fraction(1)
+            for a,b in zip(alpha,beta):
+                leibniz *= Fraction(math.comb(int(a), int(b)))
+            num_samples=_numerator_derivative_samples(beta, loop_exprs, edge_exprs, loop_derivs, edge_derivs)
+            if not num_samples:
+                continue
+            den_terms=_denominator_derivative_terms(factors,gamma)
+            if not den_terms:
+                continue
+            for ncoeff, offsets, sample_loop_exprs, sample_edge_exprs, sample_label in num_samples:
+                offset_label=','.join(_frac_to_str(x) for x in offsets)
+                for dcoeff, half_edges, chain in den_terms:
+                    coeff=residue_sign*residue_norm*leibniz*ncoeff*dcoeff
+                    if not coeff:
+                        continue
+                    beta_label=''.join(str(x) for x in beta) or '0'
+                    gamma_label=''.join(str(x) for x in gamma) or '0'
+                    label=f"{orientation_id_from_signs(edge_orient)}|B{','.join(str(x) for x in basis_orig)}|b{beta_label}|g{gamma_label}|{sample_label}"
+                    terms.append(OrientationTerm(
+                        label,
+                        'hybrid',
+                        branch,
+                        tuple(edge_orient),
+                        _frac_to_str(coeff),
+                        tuple(int(x) for x in half_edges),
+                        tuple(int(x) for x in chain),
+                        tuple(sample_loop_exprs),
+                        tuple(sample_edge_exprs),
+                        {
+                            'source':'hybrid_confluent_ltd_interpolation',
+                            'basis_logical':list(basis_logical),
+                            'basis':list(basis_orig),
+                            'cut_signs':list(cut_signs),
+                            'basis_powers':list(powers),
+                            'alpha':list(alpha),
+                            'beta':list(beta),
+                            'gamma':list(gamma),
+                            'finite_sample_offsets':offset_label,
+                            'active_basis_edges':list(active_basis),
+                            'active_edges':list(active_edges),
+                            'denominator_surface_ids':list(denominator_surface_ids),
+                            'repeated_groups':[list(ch.members) for ch in repeated],
+                        },
+                    ))
+                    branch += 1
+    return ExpressionBundle('hybrid',tuple(),tuple(),signatures,sb.build(),tuple(terms))
 
 def build_hybrid_bundle_raw(parsed):
     rep_groups=repeated_groups(parsed); signatures=tuple(e.signature for e in parsed.internal_edges)
     if not rep_groups:
         ltd=build_pure_ltd_bundle(signatures,len(parsed.ext_names))
         return ExpressionBundle('hybrid',ltd.loop_names,ltd.ext_names,ltd.signatures,ltd.surface_cache,ltd.terms)
-    return _build_coupled_cff_hybrid_bundle(parsed,'general_repeated_channel_cff_cone')
+    return _build_confluent_hybrid_bundle(parsed)
 
 def edge_spatial_momentum(signature, loop_spatial_momenta, external_momenta):
     loop_coeffs, ext_coeffs=signature; x=y=z=mp.mpf(0)

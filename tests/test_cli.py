@@ -129,16 +129,27 @@ def test_cff_box_contains_nontrivial_contraction_branch():
         for node in orient['tree']['nodes']
     )
 
-def test_hybrid_repeated_box_uses_coupled_cone_kernel():
+def test_hybrid_repeated_box_uses_confluent_kernel():
     data = build_structure(dot('box_pow3.dot'), 'hybrid')
-    assert any(o['orient_label'].endswith('|coupled') for o in data['orientations'])
-    assert all(o['meta']['source'] == 'hybrid_coupled_cff_cone_kernel' for o in data['orientations'])
-    assert all(o['meta']['coupled_reason'] == 'general_repeated_channel_cff_cone' for o in data['orientations'])
+    assert not any(o['orient_label'].endswith('|coupled') for o in data['orientations'])
+    assert all(o['meta']['source'] == 'hybrid_confluent_ltd_interpolation' for o in data['orientations'])
+    assert any(o['meta']['alpha'] != [0] for o in data['orientations'])
+    assert len(data['orientations']) != len(build_structure(dot('box_pow3.dot'), 'cff')['orientations'])
 
-def test_multiloop_hybrid_uses_same_coupled_cone_kernel():
+def test_multiloop_hybrid_uses_confluent_kernel():
     data = build_structure(dot('sunrise_pow4.dot'), 'hybrid')
-    assert any(o['orient_label'].endswith('|coupled') for o in data['orientations'])
-    assert all(o['meta']['source'] == 'hybrid_coupled_cff_cone_kernel' for o in data['orientations'])
+    assert not any(o['orient_label'].endswith('|coupled') for o in data['orientations'])
+    assert all(o['meta']['source'] == 'hybrid_confluent_ltd_interpolation' for o in data['orientations'])
+    assert any(max(o['meta']['basis_powers']) > 1 for o in data['orientations'])
+
+def test_hybrid_collapses_structurally_to_ltd_without_repeated_masses():
+    split_dot, _ = GIO.build_split_mass_dot(dot('box_pow3.dot'))
+    ltd = build_structure(split_dot, 'ltd')
+    hybrid = build_structure(split_dot, 'hybrid')
+    ltd_cmp = json.loads(json.dumps(ltd))
+    hybrid_cmp = json.loads(json.dumps(hybrid))
+    ltd_cmp['family'] = hybrid_cmp['family'] = 'same'
+    assert hybrid_cmp == ltd_cmp
 
 def test_hybrid_surfaces_have_unit_energy_coefficients():
     for path in (ROOT/'examples').glob('*.dot'):
@@ -183,6 +194,8 @@ def test_three_way_box_with_edge_numerator_reports_convergence():
     d = dot('box_pow3.dot')
     rep = run_test(d, numerator_expr='dot(edges[0], ext[0]) + dot(edges[3], ext[0])', dps=40, mass_map=BOX_MASSES, seed=1337)
     assert float(rep['abs_cff_minus_hybrid']) < 1e-35
+    assert rep['pairwise_distinct'] is True
+    assert not any(rep['exact_equalities'].values())
     diffs = [float(x['abs_to_hybrid']) for x in rep['split_ltd']]
     assert diffs[-1] <= diffs[0]
     assert float(rep['abs_hybrid_minus_split_proxy']) < 1e-5
@@ -191,14 +204,16 @@ def test_iterated_sandwiched_bubble_with_numerators():
     d = dot('proper_iterated_sandwiched_bubble.dot')
     rep = run_test(d, numerator_expr='dot(edges[1], ext[0]) + dot(edges[4], ext[0])', dps=35, mass_map=ITER_MASSES, seed=1337)
     assert float(rep['abs_cff_minus_hybrid']) < 1e-30
+    assert rep['pairwise_distinct'] is True
     assert 'split_ltd' in rep
 
 def test_mercedes_build_and_test_runs():
     d = dot('mercedes_multi_repeats.dot')
     data = build_structure(d, 'hybrid')
     assert any('|' in o['orient_label'] for o in data['orientations'])
-    rep = run_test(d, numerator_expr='dot(edges[0], edges[3])', dps=30, mass_map=MERC_MASSES, seed=7)
+    rep = run_test(d, numerator_expr='edges[0][0] + edges[3][0]', dps=30, mass_map=MERC_MASSES, seed=7)
     assert float(rep['abs_cff_minus_hybrid']) < 1e-25
+    assert rep['pairwise_distinct'] is True
 
 def test_ultimate_five_loop_bases_three_way_and_aligned_momenta():
     numerator = _all_edge_external_numerator(13)
@@ -215,7 +230,8 @@ def test_ultimate_five_loop_bases_three_way_and_aligned_momenta():
         cff_data = build_structure(d, 'cff')
         hybrid_data = build_structure(d, 'hybrid')
         assert len(cff_data['orientations']) == 930
-        assert len(hybrid_data['orientations']) == 930
+        assert len(hybrid_data['orientations']) != len(cff_data['orientations'])
+        assert any(o['meta']['source'] == 'hybrid_confluent_ltd_interpolation' for o in hybrid_data['orientations'])
 
         rep = run_test(
             d,
@@ -229,6 +245,8 @@ def test_ultimate_five_loop_bases_three_way_and_aligned_momenta():
             hybrid_data=hybrid_data,
         )
         assert mp.mpf(rep['abs_cff_minus_hybrid']) < mp.mpf('1e-60')
+        assert rep['pairwise_distinct'] is True
+        assert not any(rep['exact_equalities'].values())
 
         split_diffs = [mp.mpf(item['abs_to_hybrid']) for item in rep['split_ltd']]
         assert split_diffs[2] < split_diffs[1] < split_diffs[0]
@@ -246,11 +264,13 @@ def test_ultimate_five_loop_bases_three_way_and_aligned_momenta():
     ('kite_nested_repeats.dot', 'dot(edges[0], ext[0]) + dot(edges[-1], ext[0])'),
     ('kite_sandwich_repeats.dot', 'dot(edges[0], ext[0]) + dot(edges[-1], ext[0])'),
     ('proper_iterated_sandwiched_bubble.dot', 'dot(edges[1], ext[0]) + dot(edges[4], ext[0])'),
-    ('mercedes_multi_repeats.dot', 'dot(edges[0], edges[3])'),
+    ('mercedes_multi_repeats.dot', 'edges[0][0] + edges[3][0]'),
 ])
 def test_three_way_report_runs_for_every_valid_example(name, numerator):
     rep = run_test(dot(name), numerator_expr=numerator, dps=45, mass_map=ALL_MASSES, seed=1337, epsilons=(0.1, 0.05, 0.025, 0.0125))
     assert float(rep['abs_cff_minus_hybrid']) < 1e-35
+    assert rep['pairwise_distinct'] is True
+    assert not any(rep['exact_equalities'].values())
     assert len(rep['split_ltd']) == 4
     assert all(math.isfinite(float(item['value'])) for item in rep['split_ltd'])
     assert 'split_ltd_proxy' in rep
@@ -274,10 +294,8 @@ def test_cff_hybrid_match_all_edge_dot_numerators_for_every_valid_example(name):
     numerators = ['1']
     if parsed.ext_names:
         numerators.extend(f'dot(edges[{i}], ext[0])' for i in range(len(parsed.internal_edges)))
-    if len(parsed.internal_edges) >= 4:
-        numerators.append('dot(edges[0], edges[3])')
     else:
-        numerators.append('dot(edges[0], edges[-1])')
+        numerators.extend(f'edges[{i}][0]' for i in range(len(parsed.internal_edges)))
     for numerator in numerators:
         cff = evaluate_structure(cff_data, d, ext4, loop3, numerator, 80, masses)
         hybrid = evaluate_structure(hybrid_data, d, ext4, loop3, numerator, 80, masses)
@@ -304,10 +322,8 @@ def test_split_mass_pure_cff_matches_split_mass_pure_ltd_for_every_valid_example
     numerators = ['1']
     if parsed.ext_names:
         numerators.extend(f'dot(edges[{i}], ext[0])' for i in range(len(parsed.internal_edges)))
-    if len(parsed.internal_edges) >= 4:
-        numerators.append('dot(edges[0], edges[3])')
     else:
-        numerators.append('dot(edges[0], edges[-1])')
+        numerators.extend(f'edges[{i}][0]' for i in range(len(parsed.internal_edges)))
     for numerator in numerators:
         cff = evaluate_structure(cff_data, split_dot, ext4, loop3, numerator, 80, split_masses)
         ltd = evaluate_structure(ltd_data, split_dot, ext4, loop3, numerator, 80, split_masses)

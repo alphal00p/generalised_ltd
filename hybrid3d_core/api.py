@@ -100,6 +100,12 @@ def compare_three_modes(dot, ext4, loop3, numerator_expr: str, dps: int = 80, ep
         })
 
     split_proxy = _extrapolate_last_split_value(seq)
+    exact_equalities = {
+        'cff_hybrid': bool(cff_val == hybrid_val),
+        'cff_split_proxy': bool(cff_val == split_proxy),
+        'hybrid_split_proxy': bool(hybrid_val == split_proxy),
+    }
+    has_repeated = bool(GIO.repeated_groups(parsed_merged))
 
     return {
         'cff': str(cff_val),
@@ -108,6 +114,9 @@ def compare_three_modes(dot, ext4, loop3, numerator_expr: str, dps: int = 80, ep
         'split_ltd_proxy': str(split_proxy),
         'abs_cff_minus_split_proxy': str(abs(cff_val - split_proxy)),
         'abs_hybrid_minus_split_proxy': str(abs(hybrid_val - split_proxy)),
+        'exact_equalities': exact_equalities,
+        'pairwise_distinct_required': has_repeated,
+        'pairwise_distinct': (not any(exact_equalities.values())) if has_repeated else None,
         'split_ltd': seq,
     }
 

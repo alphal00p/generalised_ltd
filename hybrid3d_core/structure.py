@@ -1,5 +1,6 @@
 from __future__ import annotations
 import math
+from fractions import Fraction
 from typing import Any, Dict, List, Sequence, Tuple, Optional
 import mpmath as mp
 from .orientation_bundle import compute_internal_E_values, compute_external_half_edge_energies, edge_spatial_momentum, mpf
@@ -60,6 +61,13 @@ def _compress_chains(chains: List[Tuple[int, ...]]):
 def _expr_key(expr: Dict[str, Any]):
     return (tuple((int(a), int(b)) for a, b in expr.get('i', [])), tuple((int(a), int(b)) for a, b in expr.get('x', [])), str(expr.get('c', '0')))
 
+def _json_pref(value):
+    try:
+        frac = Fraction(str(value))
+    except Exception:
+        return str(value)
+    return frac.numerator if frac.denominator == 1 else str(value)
+
 
 def minimal_structure_from_bundle(bundle, parsed, backend: str, family: str, validation: dict):
     surfaces = [{'id': s.surface_id, 'k': s.kind, 'e': _linear_to_min(s.expr)} for s in bundle.surface_cache]
@@ -70,7 +78,7 @@ def minimal_structure_from_bundle(bundle, parsed, backend: str, family: str, val
         key = (
             str(t.orientation_id),
             tuple(int(x) for x in t.edge_orientations),
-            int(t.prefactor_sign),
+            str(t.prefactor_sign),
             tuple(int(x) for x in t.prefactor_half_edges),
             tuple(_expr_key(x) for x in loop_q0),
             tuple(_expr_key(x) for x in edge_q0),
@@ -79,7 +87,7 @@ def minimal_structure_from_bundle(bundle, parsed, backend: str, family: str, val
             'id': None,
             'orient_label': str(t.orientation_id),
             'edge_signs': list(t.edge_orientations),
-            'pref': int(t.prefactor_sign),
+            'pref': _json_pref(t.prefactor_sign),
             'half_edges': list(t.prefactor_half_edges),
             'loop_q0': loop_q0,
             'edge_q0': edge_q0,
