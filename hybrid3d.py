@@ -27,6 +27,10 @@ def maybe_parse_four_vectors(arg):
     return [tuple(x) for x in parse_json_arg(arg)]
 
 
+def parse_epsilons_arg(arg):
+    return tuple(x.strip() for x in arg.split(',') if x.strip())
+
+
 def cmd_validate(args):
     dot = load_dot_graph(args.dot)
     res = validate_graph(dot)
@@ -72,10 +76,10 @@ def cmd_compare(args):
     loop3 = maybe_parse_four_vectors(args.loop3)
     masses = parse_mass_map(args)
     if ext4 is None or loop3 is None or masses is None:
-        rep = run_test(dot, ext4=ext4, loop3=loop3, numerator_expr=args.numerator_expr, dps=args.dps, mass_map=masses, seed=args.seed, epsilons=tuple(float(x) for x in args.epsilons.split(',')) if args.epsilons else (1e-1,5e-2,2.5e-2,1.25e-2), cff_data=parse_json_arg(args.cff_json) if args.cff_json else None, hybrid_data=parse_json_arg(args.hybrid_json) if args.hybrid_json else None)
+        rep = run_test(dot, ext4=ext4, loop3=loop3, numerator_expr=args.numerator_expr, dps=args.dps, mass_map=masses, seed=args.seed, epsilons=parse_epsilons_arg(args.epsilons) if args.epsilons else ('0.1','0.05','0.025','0.0125'), cff_data=parse_json_arg(args.cff_json) if args.cff_json else None, hybrid_data=parse_json_arg(args.hybrid_json) if args.hybrid_json else None)
         txt = json.dumps(rep, indent=2)
     else:
-        eps = tuple(float(x) for x in args.epsilons.split(',')) if args.epsilons else (1e-1, 5e-2, 2.5e-2, 1.25e-2)
+        eps = parse_epsilons_arg(args.epsilons) if args.epsilons else ('0.1', '0.05', '0.025', '0.0125')
         data = compare_three_modes(dot, ext4, loop3, args.numerator_expr, args.dps, eps, masses, cff_data=parse_json_arg(args.cff_json) if args.cff_json else None, hybrid_data=parse_json_arg(args.hybrid_json) if args.hybrid_json else None)
         txt = json.dumps(data, indent=2)
     if args.json_out:
@@ -89,7 +93,7 @@ def cmd_test(args):
     ext4 = maybe_parse_four_vectors(args.external)
     loop3 = maybe_parse_four_vectors(args.loop3)
     masses = parse_mass_map(args)
-    eps = tuple(float(x) for x in args.epsilons.split(',')) if args.epsilons else (1e-1, 5e-2, 2.5e-2, 1.25e-2)
+    eps = parse_epsilons_arg(args.epsilons) if args.epsilons else ('0.1', '0.05', '0.025', '0.0125')
     rep = run_test(dot, ext4=ext4, loop3=loop3, numerator_expr=args.numerator_expr, dps=args.dps, mass_map=masses, seed=args.seed, epsilons=eps, cff_data=parse_json_arg(args.cff_json) if args.cff_json else None, hybrid_data=parse_json_arg(args.hybrid_json) if args.hybrid_json else None)
     txt = json.dumps(rep, indent=2)
     if args.json_out:

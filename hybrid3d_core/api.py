@@ -77,7 +77,7 @@ def _extrapolate_last_split_value(seq):
     # repeated channels are present.
     return mp.mpf(seq[-1]['value']) if seq else mp.mpf('0')
 
-def compare_three_modes(dot, ext4, loop3, numerator_expr: str, dps: int = 80, epsilons=(1e-1, 5e-2, 2.5e-2, 1.25e-2), mass_map: Optional[Dict[str, Any]] = None, cff_data: Optional[dict] = None, hybrid_data: Optional[dict] = None):
+def compare_three_modes(dot, ext4, loop3, numerator_expr: str, dps: int = 80, epsilons=('0.1', '0.05', '0.025', '0.0125'), mass_map: Optional[Dict[str, Any]] = None, cff_data: Optional[dict] = None, hybrid_data: Optional[dict] = None):
     mp.mp.dps = dps
     parsed_merged = GIO.parse_dot_graph(dot)
 
@@ -90,7 +90,7 @@ def compare_three_modes(dot, ext4, loop3, numerator_expr: str, dps: int = 80, ep
     split_ltd = build_structure(split_dot, 'ltd')
     seq = []
     for eps in epsilons:
-        split_masses = GIO.build_split_mass_assignments(parsed_merged, mass_map or {}, float(eps))
+        split_masses = GIO.build_split_mass_assignments(parsed_merged, mass_map or {}, eps)
         val = evaluate_structure(split_ltd, split_dot, ext4, loop3, numerator_expr, dps, split_masses)
         seq.append({
             'epsilon': float(eps),
@@ -111,13 +111,13 @@ def compare_three_modes(dot, ext4, loop3, numerator_expr: str, dps: int = 80, ep
         'split_ltd': seq,
     }
 
-def run_test(dot, ext4=None, loop3=None, numerator_expr: str = '1', dps: int = 80, epsilons=(1e-1, 5e-2, 2.5e-2, 1.25e-2), mass_map: Optional[Dict[str, Any]] = None, seed: int = 1337, cff_data: Optional[dict] = None, hybrid_data: Optional[dict] = None):
+def run_test(dot, ext4=None, loop3=None, numerator_expr: str = '1', dps: int = 80, epsilons=('0.1', '0.05', '0.025', '0.0125'), mass_map: Optional[Dict[str, Any]] = None, seed: int = 1337, cff_data: Optional[dict] = None, hybrid_data: Optional[dict] = None):
     rnd_ext4, rnd_loop3, rnd_masses = _random_default_inputs(dot, seed)
     ext4 = rnd_ext4 if ext4 is None else ext4
     loop3 = rnd_loop3 if loop3 is None else loop3
     masses = dict(rnd_masses)
     if mass_map:
-        masses.update({str(k): float(v) for k, v in mass_map.items()})
+        masses.update({str(k): v for k, v in mass_map.items()})
     report = compare_three_modes(dot, ext4, loop3, numerator_expr, dps, epsilons, masses, cff_data=cff_data, hybrid_data=hybrid_data)
     report['external'] = [list(x) for x in ext4]
     report['loop3'] = [list(x) for x in loop3]

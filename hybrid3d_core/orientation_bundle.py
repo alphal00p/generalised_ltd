@@ -96,8 +96,8 @@ class CFFGenerationGraphPy:
 
 def mpf(x) -> mp.mpf:
     if isinstance(x, mp.mpf): return x
-    if isinstance(x, str): return mp.mpf(x)
-    return mp.mpf(repr(float(x)))
+    if isinstance(x, float): return mp.mpf(repr(x))
+    return mp.mpf(str(x))
 
 def orientation_id_from_signs(signs: Sequence[int]) -> str:
     return ''.join('+' if int(s)>0 else '-' if int(s)<0 else '0' for s in signs)
@@ -441,9 +441,11 @@ def build_hybrid_bundle_raw(parsed):
     return ExpressionBundle('hybrid',cff.loop_names,cff.ext_names,cff.signatures,cff.surface_cache,tuple(hybrid_terms))
 
 def edge_spatial_momentum(signature, loop_spatial_momenta, external_momenta):
-    loop_coeffs, ext_coeffs=signature; x=y=z=0.0
-    for c,v in zip(loop_coeffs,loop_spatial_momenta): x+=c*v[0]; y+=c*v[1]; z+=c*v[2]
-    for c,p in zip(ext_coeffs,external_momenta): x+=c*p[1]; y+=c*p[2]; z+=c*p[3]
+    loop_coeffs, ext_coeffs=signature; x=y=z=mp.mpf(0)
+    for c,v in zip(loop_coeffs,loop_spatial_momenta):
+        x+=mpf(c)*mpf(v[0]); y+=mpf(c)*mpf(v[1]); z+=mpf(c)*mpf(v[2])
+    for c,p in zip(ext_coeffs,external_momenta):
+        x+=mpf(c)*mpf(p[1]); y+=mpf(c)*mpf(p[2]); z+=mpf(c)*mpf(p[3])
     return (x,y,z)
 def compute_internal_E_values(signatures,masses,loop_spatial_momenta,external_momenta):
     out={}

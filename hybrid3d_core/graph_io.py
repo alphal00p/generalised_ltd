@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from typing import Tuple, List, Dict, Optional, Any
 import re
 import pydot
+import mpmath as mp
 from . import graph_signatures as SIG2G
 
 Signature = Tuple[Tuple[int, ...], Tuple[int, ...]]
@@ -149,15 +150,22 @@ def repeated_groups(parsed: ParsedGraph) -> Tuple[RepeatedGroup, ...]:
     out.sort(key=lambda g: g.edge_ids)
     return tuple(out)
 
-def resolve_edge_masses(parsed: ParsedGraph, mass_map: Optional[Dict[str, Any]]) -> Tuple[float, ...]:
+def _as_mpf(x: Any) -> mp.mpf:
+    if isinstance(x, mp.mpf):
+        return x
+    if isinstance(x, float):
+        return mp.mpf(repr(x))
+    return mp.mpf(str(x))
+
+def resolve_edge_masses(parsed: ParsedGraph, mass_map: Optional[Dict[str, Any]]) -> Tuple[Any, ...]:
     mass_map = mass_map or {}; out=[]; missing=[]
     for edge in parsed.internal_edges:
         if edge.mass_key is None:
-            out.append(0.0)
+            out.append('0')
         elif edge.mass_key in mass_map:
-            out.append(float(mass_map[edge.mass_key]))
+            out.append(mass_map[edge.mass_key])
         else:
-            missing.append(edge.mass_key); out.append(0.0)
+            missing.append(edge.mass_key); out.append('0')
     if missing:
         raise KeyError(f'Missing numeric mass assignments for keys: {sorted(set(missing))}')
     return tuple(out)
@@ -190,12 +198,14 @@ def build_split_mass_dot(dot: pydot.Dot) -> tuple[pydot.Dot, dict[str, list[str]
         new_dot.add_edge(ne)
     return new_dot, mapping
 
-def build_split_mass_assignments(parsed: ParsedGraph, base_mass_map: Dict[str, Any], epsilon: float) -> Dict[str, float]:
-    masses={str(k): float(v) for k,v in (base_mass_map or {}).items()}
+def build_split_mass_assignments(parsed: ParsedGraph, base_mass_map: Dict[str, Any], epsilon: Any) -> Dict[str, str]:
+    masses={str(k): str(_as_mpf(v)) for k,v in (base_mass_map or {}).items()}
+    eps=_as_mpf(epsilon)
     for grp in repeated_groups(parsed):
         base=grp.key[1] if grp.key[1] is not None else f'massless_group_{grp.edge_ids[0]}'
-        base_val=float(masses.get(base, 0.0)); n=len(grp.edge_ids); center=(n-1)/2.0
-        for i,_ in enumerate(grp.edge_ids): masses[f'{base}__split{i}']=base_val+(i-center)*float(epsilon)
+        base_val=_as_mpf(masses.get(base, '0')); n=len(grp.edge_ids); center=mp.mpf(n-1)/2
+        for i,_ in enumerate(grp.edge_ids):
+            masses[f'{base}__split{i}']=str(base_val+(mp.mpf(i)-center)*eps)
     return masses
 
 def graph_info(parsed: ParsedGraph) -> dict:

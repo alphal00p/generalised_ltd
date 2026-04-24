@@ -126,7 +126,38 @@ def test_split_mass_pure_cff_matches_split_mass_pure_ltd_for_every_valid_example
     ext4, loop3, default_masses = __import__('hybrid3d_core.api').api._random_default_inputs(d, 1337)
     masses = {**default_masses, **ALL_MASSES}
     split_dot, _ = GIO.build_split_mass_dot(d)
-    split_masses = GIO.build_split_mass_assignments(parsed, masses, 1e-3)
-    cff = evaluate_structure(build_structure(split_dot, 'cff'), split_dot, ext4, loop3, '1', 70, split_masses)
-    ltd = evaluate_structure(build_structure(split_dot, 'ltd'), split_dot, ext4, loop3, '1', 70, split_masses)
-    assert abs(cff - ltd) < 1e-50
+    split_masses = GIO.build_split_mass_assignments(parsed, masses, '0.001')
+    cff_data = build_structure(split_dot, 'cff')
+    ltd_data = build_structure(split_dot, 'ltd')
+    numerators = ['1']
+    if parsed.ext_names:
+        numerators.extend([
+            'dot(edges[0], ext[0]) + dot(edges[-1], ext[0])',
+            'dot(edges[len(edges)//2], ext[0]) + dot(edges[-1], ext[0])',
+        ])
+    if len(parsed.internal_edges) >= 4:
+        numerators.append('dot(edges[0], edges[3])')
+    else:
+        numerators.append('dot(edges[0], edges[-1])')
+    for numerator in numerators:
+        cff = evaluate_structure(cff_data, split_dot, ext4, loop3, numerator, 80, split_masses)
+        ltd = evaluate_structure(ltd_data, split_dot, ext4, loop3, numerator, 80, split_masses)
+        assert abs(cff - ltd) < 1e-65, (name, numerator, cff, ltd)
+
+
+def test_split_mass_pure_cff_ltd_numerator_agreement_improves_with_precision():
+    d = dot('box_pow3.dot')
+    parsed = GIO.parse_dot_graph(d)
+    ext4, loop3, default_masses = __import__('hybrid3d_core.api').api._random_default_inputs(d, 1337)
+    masses = {**default_masses, **ALL_MASSES}
+    split_dot, _ = GIO.build_split_mass_dot(d)
+    split_masses = GIO.build_split_mass_assignments(parsed, masses, '0.001')
+    cff_data = build_structure(split_dot, 'cff')
+    ltd_data = build_structure(split_dot, 'ltd')
+    numerator = 'dot(edges[0], ext[0]) + dot(edges[-1], ext[0])'
+    diffs = []
+    for dps in (40, 80):
+        cff = evaluate_structure(cff_data, split_dot, ext4, loop3, numerator, dps, split_masses)
+        ltd = evaluate_structure(ltd_data, split_dot, ext4, loop3, numerator, dps, split_masses)
+        diffs.append(abs(cff - ltd))
+    assert diffs[1] < diffs[0] * 1e-25

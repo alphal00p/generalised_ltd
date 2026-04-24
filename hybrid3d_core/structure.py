@@ -2,7 +2,7 @@ from __future__ import annotations
 import math
 from typing import Any, Dict, List, Sequence, Tuple, Optional
 import mpmath as mp
-from .orientation_bundle import compute_internal_E_values, compute_external_half_edge_energies, edge_spatial_momentum
+from .orientation_bundle import compute_internal_E_values, compute_external_half_edge_energies, edge_spatial_momentum, mpf
 from .graph_io import parse_dot_graph, resolve_edge_masses
 
 
@@ -12,7 +12,7 @@ def dot4(a, b):
 
 def numerator_from_expr(expr: str):
     code = compile(expr, '<numerator-expr>', 'eval')
-    safe = {'dot': dot4, 'abs': abs, 'min': min, 'max': max, 'sum': sum, 'math': math}
+    safe = {'dot': dot4, 'abs': abs, 'min': min, 'max': max, 'sum': sum, 'len': len, 'math': math}
     def fn(loop_four, external_four, edge_four=None, source_edge_four=None):
         return eval(code, {'__builtins__': {}}, dict(safe, loops=loop_four, ext=external_four, edges=edge_four or (), src_edges=source_edge_four or ()))
     return fn
@@ -110,15 +110,15 @@ def minimal_structure_from_bundle(bundle, parsed, backend: str, family: str, val
 
 def compute_edge_four_vectors(signatures, masses, loop_spatial, ext4, edge_q0_exprs, parsed, ose_override=None):
     E_vals = compute_internal_E_values(signatures, masses, loop_spatial, ext4)
-    OSE_vals = {i: mp.mpf(ext4[i][0]) for i in range(len(ext4))}
+    OSE_vals = {i: mpf(ext4[i][0]) for i in range(len(ext4))}
     OSE_vals.update(compute_external_half_edge_energies(parsed, ext4))
     if ose_override:
-        OSE_vals.update({int(k): mp.mpf(v) for k, v in ose_override.items()})
+        OSE_vals.update({int(k): mpf(v) for k, v in ose_override.items()})
     out = []
     for expr, sig in zip(edge_q0_exprs, signatures):
         q0 = _min_eval(expr, E_vals, OSE_vals)
         spatial = edge_spatial_momentum(sig, loop_spatial, ext4)
-        out.append((float(q0), float(spatial[0]), float(spatial[1]), float(spatial[2])))
+        out.append((q0, mpf(spatial[0]), mpf(spatial[1]), mpf(spatial[2])))
     return tuple(out)
 
 
@@ -143,10 +143,11 @@ def evaluate_minimal_bundle(data, dot, ext4, loop3, numerator_fn, mass_map=None,
     masses = resolve_edge_masses(parsed, mass_map)
     signatures = tuple(e.signature for e in parsed.internal_edges)
     E_vals = compute_internal_E_values(signatures, masses, loop3, ext4)
-    OSE_vals = {i: mp.mpf(ext4[i][0]) for i in range(len(ext4))}
+    OSE_vals = {i: mpf(ext4[i][0]) for i in range(len(ext4))}
     OSE_vals.update(compute_external_half_edge_energies(parsed, ext4))
     if ose_override:
-        OSE_vals.update({int(k): mp.mpf(v) for k, v in ose_override.items()})
+        OSE_vals.update({int(k): mpf(v) for k, v in ose_override.items()})
+    ext4_mp = tuple(tuple(mpf(x) for x in p) for p in ext4)
 
     total = mp.mpf(0)
     for orient in data['orientations']:
@@ -164,9 +165,9 @@ def evaluate_minimal_bundle(data, dot, ext4, loop3, numerator_fn, mass_map=None,
             for e in var['half_edges']:
                 pref /= (2 * E_vals[int(e)])
             loop_q0 = [_min_eval(x, E_vals, OSE_vals) for x in var['loop_q0']]
-            loop_four = tuple((float(loop_q0[i]), *loop3[i]) for i in range(len(loop3)))
-            edge_four = compute_edge_four_vectors(signatures, masses, loop3, ext4, var['edge_q0'], parsed, ose_override=ose_override)
-            num = mp.mpf(numerator_fn(loop_four, ext4, edge_four, edge_four))
+            loop_four = tuple((loop_q0[i], *(mpf(x) for x in loop3[i])) for i in range(len(loop3)))
+            edge_four = compute_edge_four_vectors(signatures, masses, loop3, ext4_mp, var['edge_q0'], parsed, ose_override=ose_override)
+            num = mp.mpf(numerator_fn(loop_four, ext4_mp, edge_four, edge_four))
             treesum = mp.mpf(0)
             for r in var['tree']['roots']:
                 treesum += _sum_tree(var['tree'], r, data['surfaces'], E_vals, OSE_vals)
