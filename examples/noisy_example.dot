@@ -1,0 +1,9 @@
+digraph GL0{
+    0 [dod="0"];
+    1 [dod="0"];
+    exte0 [style=invis];
+    exte0 -> 1:0 [id=0 dir=none sink=0 dod="-2" is_dummy="false" lmb_rep="P(0,a___)" name="e0"];
+    0:1 -> exte1 [id=1 dir=none source=0 dod="-2" is_dummy="false" lmb_rep="P(0,a___)" name="e1"];
+    0:2 -> 1:3 [id=2 dir=none source=1 sink=1 dod="-1" is_dummy="false" lmb_id="0" lmb_rep="K(0,a___)" name="e2" mass="mX"];
+    0:4 -> 1:5 [id=3 pow=2 dir=none source=2 sink=2 dod="-2" is_dummy="false" lmb_rep="-1*K(0,a___)+-1*P(0,a___)" name="e3" mass="mX"];
+}

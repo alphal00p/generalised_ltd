@@ -1,0 +1,40 @@
+# Python bytecode and test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Editor and OS noise
+.DS_Store
+*.swp
+*.swo
+*.swn
+*~
+
+# Logs and generated command output
+*.log
+pytest_output.txt
+
+# LaTeX build artifacts; keep source .tex and rendered .pdf documents tracked.
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.lof
+*.lot
+*.out
+*.run.xml
+*.synctex.gz
+*.toc
+
+# Generated/demo JSON exports
+tt.json
+demo/
+tmp/
+build/
+dist/

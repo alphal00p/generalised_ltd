@@ -1,0 +1,14 @@
+digraph G {
+rankdir=LR;
+ext_p1 [label=p1, shape=box];
+ext_p1 -> v0 [label=p1, fontsize=10, style=dashed];
+v1 -> ext_p1 [label=p1, fontsize=10, style=dashed];
+v0 -> v1 [label="k1", fontsize=10, mass="mA"];
+v0 -> vA0 [label="p1-k1", fontsize=10, mass="mB"];
+vA0 -> vA1 [label="k2", fontsize=10, mass="mC"];
+vA0 -> vB0 [label="p1-k1-k2", fontsize=10, mass="mD"];
+vB0 -> vB1 [label="p1-k1-k2+k3", fontsize=10, mass="mE"];
+vB1 -> vB0 [label="k3", fontsize=10, mass="mF"];
+vA1 -> vB1 [label="-p1+k1+k2", fontsize=10, mass="mD"];
+vA1 -> v1 [label="p1-k1", fontsize=10, mass="mB"];
+}

@@ -1,0 +1,17 @@
+digraph G {
+rankdir=LR;
+v0 [label=v0, shape=circle];
+v1 [label=v1, shape=circle];
+v2 [label=v2, shape=circle];
+v3 [label=v3, shape=circle];
+v4 [label=v4, shape=circle];
+ext_p1 [label=p1, shape=box];
+v0 -> v1 [label="-k1 - k2 + p1", fontsize=10, mass="m1"];
+v0 -> v1 [label=k1, fontsize=10, mass="m2"];
+v0 -> v2 [label=k2, fontsize=10, mass="m3"];
+v2 -> v3 [label=k2, fontsize=10, mass="m3"];
+v3 -> v4 [label=k2, fontsize=10, mass="m3"];
+v4 -> v1 [label=k2, fontsize=10, mass="m3"];
+ext_p1 -> v0 [label=p1, fontsize=10, style=dashed];
+v1 -> ext_p1 [label="-p1", fontsize=10, style=dashed];
+}

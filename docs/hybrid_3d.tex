@@ -1,0 +1,642 @@
+\documentclass[11pt,a4paper]{report}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,mathtools,bm}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{array}
+\usepackage{microtype}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+\lstset{basicstyle=\ttfamily\small,breaklines=true,columns=fullflexible,frame=single}
+
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\ii}{\mathrm{i}}
+\newcommand{\eps}{\varepsilon}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\C}{\mathbb{C}}
+\newcommand{\sgn}{\operatorname{sgn}}
+\newcommand{\Res}{\operatorname{Res}}
+\newcommand{\LTD}{\operatorname{LTD}}
+\newcommand{\CFF}{\operatorname{CFF}}
+\newcommand{\OSE}{\operatorname{OSE}}
+\newcommand{\ExtE}{\operatorname{E}}
+\newcommand{\one}{\mathbf{1}}
+\newcommand{\VE}{\mathcal{E}}
+\newcommand{\VG}{\mathcal{G}}
+\newcommand{\VR}{\mathcal{R}}
+\newcommand{\VS}{\mathcal{S}}
+\newcommand{\VT}{\mathcal{T}}
+\newcommand{\VB}{\mathcal{B}}
+\newcommand{\VO}{\mathcal{O}}
+\newcommand{\VC}{\mathcal{C}}
+\newcommand{\VD}{\mathcal{D}}
+\newcommand{\VQ}{\mathcal{Q}}
+\newcommand{\VW}{\mathcal{W}}
+\newcommand{\VX}{\mathcal{X}}
+\newcommand{\M}{\mathsf{M}}
+\newcommand{\rhoE}{\rho}
+\newcommand{\etaE}{\eta}
+\newcommand{\chain}{\mathsf{ch}}
+\newcommand{\cuts}{\mathsf{cut}}
+\newcommand{\rep}{\mathsf{rep}}
+
+\title{A Hybrid Loop--Tree Duality / Capatti--Feynman--Forest Representation for Repeated Propagator Channels\\[3pt]
+\large Detailed derivation, tau-contour structure, dotted box example, and Python implementation status}
+\author{Generated research note}
+\date{April 2026}
+
+\begin{document}
+\maketitle
+\begin{abstract}
+  This note records a self-contained derivation of the hybrid representation implemented in the current DOT-only prototype.  The purpose is narrow: repeated propagator powers are represented by distinct graph edges with identical momentum routing and identical symbolic mass key; the representation then combines ordinary LTD on the non-repeated part with a local CFF/Fourier treatment of the repeated channel.  The central point is the order of operations.  Localizing deltas are written in Fourier form.  At fixed Fourier parameters, the energy integrals are ordinary Feynman energy integrals multiplied by complex exponentials; the sign of the corresponding Fourier combination fixes whether the contour must be closed above or below.  After this LTD step, the remaining Fourier integrals are precisely cone integrals of the CFF type, shifted by the already-chosen LTD/on-shell chain data.  A single extra chain sign per repeated channel is enough to encode this contour information.  The final orientation label is therefore an edge-sign string together with one chain-sign string, and the exported JSON stores the resulting numerator substitution map explicitly for every original edge.
+\end{abstract}
+\tableofcontents
+
+\chapter{Theory}
+
+\section{Input graph, routing, and ordinary four-dimensional integral}
+
+Let
+\[
+  G=(V,E_{\rm int},E_{\rm ext})
+\]
+be a directed graph read from a DOT file.  Internal edges are labelled by their loop-momentum decomposition and by an optional symbolic mass key.  If the internal edge $e$ carries momentum
+\begin{equation}
+  q_e(k,p)=\sum_{r=1}^{L}\rho_{er} k_r + \sum_{a=1}^{n_{\rm ext}}\eta_{ea}p_a,
+  \qquad \rho_{er},\eta_{ea}\in\mathbb Z,
+\end{equation}
+then its energy component is
+\begin{equation}
+  q_e^0(k^0,p^0)=\rho_e\cdot k^0+\eta_e\cdot p^0.
+\end{equation}
+For fixed spatial loop momenta $\vec k=(\vec k_1,\ldots,\vec k_L)$ and fixed external four-momenta $p_a$, define the on-shell energy
+\begin{equation}
+  \omega_e(\vec k,p,m)=\sqrt{\vec q_e^{\,2}+m_e^2-i0}.
+\end{equation}
+In the implementation this is displayed as \(\OSE[e]\), whereas external energy components are displayed as \(\ExtE[a]=p_a^0\).  The Feynman denominator is
+\begin{equation}
+  D_e(q_e)= (q_e^0)^2-\omega_e^2+\ii0
+  = (q_e^0-\omega_e+\ii0)(q_e^0+\omega_e-\ii0).
+\end{equation}
+
+The starting integral is
+\begin{equation}
+  I_G=\int\prod_{r=1}^{L}\frac{\dd^4 k_r}{(2\pi)^4}\;
+  \frac{N_G(\{q_e(k,p)\}_{e\in E_{\rm int}},\{p_a\})}
+  {\prod_{e\in E_{\rm int}}D_e(q_e(k,p))} .
+  \label{eq:start4d}
+\end{equation}
+The numerator is assumed to satisfy the usual CFF condition: as a function of any internal edge energy used in the local CFF representation, its degree is at most one.  The implementation does not symbolically use this polynomial condition; it is used mathematically to justify the CFF numerator replacement rule.
+
+\section{Repeated channels: graph convention and lifted numerator}
+
+Repeated propagators are not represented by a \texttt{pow} attribute.  Instead one supplies distinct internal edges.  A repeated channel is an equivalence class
+\begin{equation}
+  R_g=\{r_{g,1},\ldots,r_{g,\nu_g}\}\subset E_{\rm int}, \qquad \nu_g\ge 2,
+\end{equation}
+whose members have the same canonical momentum routing up to overall orientation and the same symbolic mass key.  The canonical routing is denoted by
+\begin{equation}
+  Q_g^0(k^0,p^0)=\rho_g\cdot k^0+\eta_g\cdot p^0.
+\end{equation}
+For every member $r_{g,a}$ there is an orientation sign $\epsilon_{g,a}=\pm1$ such that
+\begin{equation}
+  q_{r_{g,a}}^0(k^0,p^0)=\epsilon_{g,a}Q_g^0(k^0,p^0).
+\end{equation}
+For notational clarity most formulas below use the canonical orientation, i.e. they absorb $\epsilon_{g,a}$ into the definition of the copy variable.  The implementation keeps the original source-edge orientation sign and applies it when it builds per-edge substitution maps.
+
+The numerator is lifted to a function of the copied edge energies,
+\begin{equation}
+  N_G(k,p)\quad\longrightarrow\quad
+  N_G^\sharp\bigl(
+  \{q_s\}_{s\notin \cup_g R_g},
+  \{q_{r_{g,a}}\}_{g,a},
+  \{p_a\}
+  \bigr),
+\end{equation}
+with the defining property
+\begin{equation}
+  N_G^\sharp\Big|_{q_{r_{g,1}}^0=\cdots=q_{r_{g,\nu_g}}^0=Q_g^0}
+  =N_G .
+\end{equation}
+In the Python interface this lifted numerator is what the user accesses through the \texttt{edges[i]} argument: every original internal edge receives its own four-vector, even if several edges represent the same repeated channel.
+
+\section{Exact localization identity}
+
+Introduce one independent energy variable $z_{g,a}$ for each repeated copy and one common channel energy
+\begin{equation}
+  z_g=Q_g^0(k^0,p^0).
+\end{equation}
+For a single repeated set $R_g$, the identity used under the energy integral is
+\begin{align}
+   & \frac{N_G(\ldots,z_g,\ldots)}{\bigl[D_g(z_g)\bigr]^{\nu_g}}
+  \nonumber\displaybreak[0]                                      \\
+   & \quad =
+  \int\prod_{a=1}^{\nu_g}\frac{\dd z_{g,a}}{2\pi}
+  \;N_G^\sharp(\ldots,z_{g,1},\ldots,z_{g,\nu_g},\ldots)
+  \prod_{a=1}^{\nu_g}\frac{1}{D_{r_{g,a}}(z_{g,a})}
+  \prod_{a=1}^{\nu_g}2\pi\delta(z_{g,a}-z_g).
+  \label{eq:localization-identity}
+\end{align}
+Here all copies have the same spatial momentum and the same mass key, so $D_{r_{g,a}}$ differs only by its copy label.  Applying \eqref{eq:localization-identity} to all repeated sets gives the strict equality
+\begin{align}
+  I_G
+   & =\int\dd\Phi_{3L}(\vec k)
+  \int\prod_{r=1}^{L}\frac{\dd k_r^0}{2\pi}
+  \int\prod_{g}\prod_{a=1}^{\nu_g}\frac{\dd z_{g,a}}{2\pi}
+  \;N_G^\sharp(\mathcal Q)
+  \notag                       \\
+   & \quad\times
+  \prod_{s\in S}\frac{1}{D_s(q_s^0(k^0,p^0))}
+  \prod_g\prod_{a=1}^{\nu_g}\frac{1}{D_{r_{g,a}}(z_{g,a})}
+  \prod_g\prod_{a=1}^{\nu_g}2\pi\delta\bigl(z_{g,a}-Q_g^0(k^0,p^0)\bigr),
+  \label{eq:after-copy}
+\end{align}
+where $S=E_{\rm int}\setminus\cup_g R_g$ and
+\begin{equation}
+  \dd\Phi_{3L}(\vec k)=\prod_{r=1}^{L}\frac{\dd^3\vec k_r}{(2\pi)^3}.
+\end{equation}
+
+\section{Fourier representation of the localizing deltas}
+
+Use
+\begin{equation}
+  2\pi\delta(z_{g,a}-z_g)=\int_{-\infty}^{+\infty}\dd\tau_{g,a}\;
+  \exp\bigl\{\ii\tau_{g,a}(z_{g,a}-z_g)\bigr\}.
+\end{equation}
+Then \eqref{eq:after-copy} becomes
+\begin{align}
+  I_G
+   & =\int\dd\Phi_{3L}(\vec k)
+  \int\prod_{g,a}\dd\tau_{g,a}
+  \int\prod_{r=1}^{L}\frac{\dd k_r^0}{2\pi}
+  \int\prod_{g,a}\frac{\dd z_{g,a}}{2\pi}
+  \;N_G^\sharp(\mathcal Q)
+  \notag                       \\
+   & \quad\times
+  \prod_{s\in S}\frac{1}{D_s(q_s^0(k^0,p^0))}
+  \prod_{g,a}\frac{1}{D_{r_{g,a}}(z_{g,a})}
+  \exp\left\{
+  \ii\sum_{g,a}\tau_{g,a}z_{g,a}
+  -\ii\sum_g T_g(\tau)Q_g^0(k^0,p^0)
+  \right\},
+  \label{eq:fourier-all}
+\end{align}
+with
+\begin{equation}
+  T_g(\tau)=\sum_{a=1}^{\nu_g}\tau_{g,a}.
+\end{equation}
+This equation is the useful starting point for the hybrid derivation.  The $z_{g,a}$ variables are copy energies and appear only in simple Feynman denominators and in exponentials.  The original loop energies $k_r^0$ appear in the non-repeated denominators and in the phase
+\begin{equation}
+  \exp\left[-\ii\sum_g T_g(\tau)Q_g^0(k^0,p^0)\right].
+\end{equation}
+
+\section{The fixed-\texorpdfstring{$\tau$}{tau} energy integral and contour closure}
+
+At fixed real $\tau$, the $k^0$ integral in \eqref{eq:fourier-all} is an ordinary Feynman energy integral multiplied by a plane wave.  Choose a hybrid energy basis
+\begin{equation}
+  u=(u_1,\ldots,u_L)=(Q_{g_1}^0,\ldots,Q_{g_m}^0,\ell_1^0,\ldots,\ell_{L-m}^0),
+\end{equation}
+where the first $m$ coordinates are independent repeated-channel energies and the remaining coordinates complete an invertible linear basis.  Let $J_u=|\det(\partial u/\partial k^0)|^{-1}$.  Then
+\begin{align}
+   & \int\prod_{r=1}^{L}\frac{\dd k_r^0}{2\pi}
+  \prod_{s\in S}\frac{1}{D_s(q_s^0(k^0,p^0))}
+  e^{-\ii\sum_g T_gQ_g^0(k^0,p^0)}F(k^0)
+  \notag                                       \\
+   & \quad=
+  J_u\int\prod_{j=1}^{L}\frac{\dd u_j}{2\pi}
+  \prod_{s\in S}\frac{1}{D_s(q_s^0(u,p^0))}
+  e^{-\ii\sum_{g=1}^{m}T_g u_g}F(u).
+  \label{eq:fixed-tau-u}
+\end{align}
+For $u_g=x+\ii y$ the exponential $e^{-\ii T_g u_g}$ has modulus $e^{T_g y}$.  Therefore
+\begin{equation}
+  T_g>0\Rightarrow u_g \hbox{ is closed below},\qquad
+  T_g<0\Rightarrow u_g \hbox{ is closed above}.
+  \label{eq:closure-rule}
+\end{equation}
+This is the crucial point.  The Fourier parameters do not merely multiply the result by harmless phases; they select the LTD contour closure in every repeated-channel direction.
+
+Define the chain sign
+\begin{equation}
+  \chi_g=\sgn T_g\in\{+1,-1\}.
+\end{equation}
+For fixed $\chi=(\chi_1,\\ldots,\chi_m)$, the $u$-integral is precisely an ordinary simple-pole LTD energy integral with contour closure vector
+\begin{equation}
+  \kappa_g(\chi)=
+  \begin{cases}
+    \hbox{below}, & \chi_g=+1, \\
+    \hbox{above}, & \chi_g=-1,
+  \end{cases}
+\end{equation}
+for repeated-channel coordinates, and arbitrary fixed closure choices for the remaining basis coordinates.  Hence the fixed-$\tau$ equality can be written as
+\begin{equation}
+  \int\dd^L k^0\; e^{-\ii T\cdot Q(k^0)}\,\mathcal I_{\rm simple}(k^0)
+  =\sum_{b\in\VB(\chi)}
+  \LTD_b^{\kappa(\chi)}[\mathcal I_{\rm simple}]\;
+  \exp\{-\ii T\cdot Q_b^0(\chi)\},
+  \label{eq:fixed-tau-ltd}
+\end{equation}
+where $b$ runs over the ordinary LTD residue bases allowed by that closure vector, and $Q_b^0(\chi)$ denotes the repeated-channel energy evaluated on the residue solution of $b$.  No higher-order pole appears in \eqref{eq:fixed-tau-ltd}; all denominators are simple because the repeated propagators were replaced by independent copy variables.
+
+\section{Copy-energy residues and the origin of edge signs}
+
+For each copy variable $z_{g,a}$ one has the elementary contour integral
+\begin{equation}
+  Z_{g,a}(\tau_{g,a})=
+  \int\frac{\dd z}{2\pi}\frac{e^{\ii\tau_{g,a}z}}{z^2-\omega_{g,a}^2+\ii0}F(z).
+\end{equation}
+The exponential $e^{\ii\tau z}$ decays in the upper half-plane for $\tau>0$ and in the lower half-plane for $\tau<0$.  With the usual Feynman prescription this gives
+\begin{equation}
+  \tau>0 \Rightarrow z=-\omega+\ii0,
+  \qquad
+  \tau<0 \Rightarrow z=+\omega-\ii0.
+\end{equation}
+It is convenient to introduce the edge orientation sign
+\begin{equation}
+  \sigma_{g,a}=-\sgn(\tau_{g,a}),
+\end{equation}
+so that the residue substitution is simply
+\begin{equation}
+  z_{g,a}=\sigma_{g,a}\omega_{g,a}.
+  \label{eq:copy-substitution}
+\end{equation}
+The residue also contributes the usual half-edge factor $(2\omega_{g,a})^{-1}$ and a sign determined by the chosen contour; this sign is part of the orientation prefactor stored in the JSON.
+
+Now write
+\begin{equation}
+  \tau_{g,a}=-\sigma_{g,a}\alpha_{g,a},\qquad \alpha_{g,a}>0.
+\end{equation}
+Then
+\begin{equation}
+  T_g(\tau)=-\sum_{a=1}^{\nu_g}\sigma_{g,a}\alpha_{g,a}.
+\end{equation}
+Thus the chain sign is fixed by the sign of a single real linear form in the positive variables:
+\begin{equation}
+  \chi_g=-\sgn\left(\sum_{a=1}^{\nu_g}\sigma_{g,a}\alpha_{g,a}\right).
+  \label{eq:chain-sign-cone}
+\end{equation}
+If all copy signs $\sigma_{g,a}$ are equal, only one value of $\chi_g$ has a non-empty cone.  If the signs are mixed, both $\chi_g=+1$ and $\chi_g=-1$ are possible.  This proves the key compression used in the implementation: for each repeated set one needs only one additional binary chain sign, not one extra hidden sign per copy.
+
+\section{The tau cones and the local CFF factor}
+
+Insert \eqref{eq:fixed-tau-ltd} and \eqref{eq:copy-substitution} into \eqref{eq:fourier-all}.  For each repeated set $g$, each copy-sign vector $\sigma_g=(\sigma_{g,1},\ldots,\sigma_{g,\nu_g})$, and each chain sign $\chi_g$ define the cone
+\begin{equation}
+  \VC_g(\sigma_g,\chi_g)=
+  \left\{\alpha_g\in\R_{>0}^{\nu_g}\;\middle|\;
+  -\sgn\left(\sum_a\sigma_{g,a}\alpha_{g,a}\right)=\chi_g
+  \right\}.
+\end{equation}
+The phase in this cone has the form
+\begin{align}
+  \Phi_{g,b}(\alpha_g;\sigma_g,\chi_g)
+   & =\sum_{a=1}^{\nu_g}(-\sigma_{g,a}\alpha_{g,a})(\sigma_{g,a}\omega_{g,a})
+  -T_g(\tau)Q_{g,b}^0(\chi)
+  \notag                                                                          \\
+   & =-\sum_{a}\alpha_{g,a}\omega_{g,a}
+  +\left(\sum_a\sigma_{g,a}\alpha_{g,a}\right)Q_{g,b}^0(\chi)
+  \notag                                                                          \\
+   & = -\sum_{a}\alpha_{g,a}\bigl(\omega_{g,a}-\sigma_{g,a}Q_{g,b}^0(\chi)\bigr).
+  \label{eq:phase-cone}
+\end{align}
+Therefore the remaining Fourier integral over the cone is
+\begin{equation}
+  \CFF_g(\sigma_g,
+  \chi_g;Q_{g,b}^0)
+  =\int_{\VC_g(\sigma_g,\chi_g)}
+  \prod_{a=1}^{\nu_g}\dd\alpha_{g,a}\;
+  \exp\left[-\ii\sum_a\alpha_{g,a}
+    \bigl(\omega_{g,a}-\sigma_{g,a}Q_{g,b}^0(\chi)\bigr)\right].
+  \label{eq:cone-integral}
+\end{equation}
+The integral \eqref{eq:cone-integral} is exactly a CFF cone integral: the cone is polyhedral, its facets are linear, and its evaluation is a sum/product of inverse linear causal surfaces.  The implementation stores this factorized result as a tree of surface ids.  In particular, if the cone is simplicial with primitive generators $v_j$, then one term has the form
+\begin{equation}
+  \prod_j\frac{\ii}{v_j\cdot A_{g,b}(\sigma_g,\chi_g)-\ii0},
+  \qquad
+  A_{g,b,a}=\omega_{g,a}-\sigma_{g,a}Q_{g,b}^0(\chi),
+\end{equation}
+while non-simplicial cones are decomposed into a sum of such products.  This is the same operation performed by the ordinary CFF graph-contraction algorithm; the only difference is the shift $Q_{g,b}^0(\chi)$ inherited from the earlier LTD step.
+
+\section{Hybrid orientation and numerator substitution map}
+
+An exported hybrid orientation is
+\begin{equation}
+  \mathfrak o=(\varsigma_e)_{e\in E_{\rm int}}\;\big|\;(\chi_g)_{g\in\VR},
+\end{equation}
+where
+\begin{equation}
+  \varsigma_e=\begin{cases}
+    \sigma_{g,a}, & e=r_{g,a}\in R_g,                                             \\
+    s_c,          & e=c\hbox{ is an ordinary LTD cut edge in the residual basis}, \\
+    0,            & \hbox{otherwise}.
+  \end{cases}
+\end{equation}
+The chain signs after the vertical bar are ordered by the minimum edge id in each repeated set.  For a given $\mathfrak o$, the numerator substitution map is stored explicitly.  It is defined by the following equations:
+\begin{align}
+  q_{r_{g,a}}^0(\mathfrak o) & =\sigma_{g,a}\omega_{r_{g,a}},
+                             &                                               & r_{g,a}\in R_g, \label{eq:subst-rep}                                      \\
+  Q_g^0(k^0,p^0)             & =Q_{g,b}^0(\chi_g),
+                             &                                               & \hbox{chain equation for group }g, \label{eq:subst-chain}                 \\
+  q_c^0(k^0,p^0)             & =s_c\omega_c,
+                             &                                               & c\hbox{ ordinary cut edge in the residual LTD basis},\label{eq:subst-cut} \\
+  q_s^0(\mathfrak o)         & =\rho_s\cdot k_b^0(\chi,s_c)+\eta_s\cdot p^0,
+                             &                                               & s\hbox{ all remaining non-repeated edges}.\label{eq:subst-rest}
+\end{align}
+Equations \eqref{eq:subst-chain} and \eqref{eq:subst-cut} form a square linear system for the loop energies $k_b^0$.  Equation \eqref{eq:subst-rep} is an edge-level override for the copied repeated edges: the copied edge energies are no longer constrained to be equal inside the numerator.  This is the CFF/TOPT numerator replacement rule in edge-energy form.  It is why the JSON stores both loop-energy substitutions and edge-energy substitutions.
+
+\section{The master formula}
+
+Let $\VB$ denote the set of residual simple-pole LTD bases compatible with the repeated-channel basis choice, and let $\VO_g(\sigma_g,\chi_g)$ be the non-empty copy-sign/chain-sign cones.  The chain of equalities from the original four-dimensional integral to the hybrid spatial integrand is
+\begin{align}
+  I_G
+   & =\int\dd\Phi_{3L}(\vec k)
+  \int\dd^L k^0\;\mathcal I_G^{4D}(k^0,\vec k)
+  \notag                       \\
+   & =\int\dd\Phi_{3L}(\vec k)
+  \int\dd^L k^0\int\dd z\int\dd\tau\;
+  \mathcal I_{\rm split}^{4D}(k^0,z,\tau;\vec k)
+  \notag                       \\
+   & =\int\dd\Phi_{3L}(\vec k)
+  \sum_{b\in\VB}\sum_{\sigma_g}\sum_{\chi_g:\VC_g\neq\emptyset}
+  \Biggl[
+    N_G^\sharp\bigl(\VQ_{b,\sigma,\chi}(\vec k)\bigr)
+    \;J_b\;H_b
+    \prod_{h\in\mathcal H_b}\frac{1}{S_h^{\rm LTD}(\vec k)}
+    \prod_{e\in\mathcal E_b}\frac{1}{S_e^{\rm LTD}(\vec k)}
+    \prod_g \CFF_g(\sigma_g,\chi_g;Q_{g,b}^0)
+    \Biggr]
+  \notag                       \\
+   & \equiv
+  \int\dd\Phi_{3L}(\vec k)
+  \;I_{G,\rm hyb}^{(3D)}(\vec k).
+  \label{eq:master-formula}
+\end{align}
+Here:
+\begin{itemize}[leftmargin=2em]
+  \item $\mathcal I_{\rm split}^{4D}$ is the exactly localized integrand in \eqref{eq:fourier-all};
+  \item $J_b$ is the determinant/Jacobian and half-edge prefactor of the ordinary simple-pole LTD residue basis $b$;
+  \item $H_b$ is the residue sign from the contour closure vector determined by \eqref{eq:closure-rule};
+  \item $S_h^{\rm LTD}$ and $S_e^{\rm LTD}$ are ordinary dual/LTD denominator surfaces of the residual simple graph after repeated-channel chain data have been fixed;
+  \item $\CFF_g$ is the local cone integral \eqref{eq:cone-integral}, evaluated by the standard CFF contraction algorithm;
+  \item $\VQ_{b,\sigma,\chi}$ is the explicit substitution map \eqref{eq:subst-rep}--\eqref{eq:subst-rest}.
+\end{itemize}
+The classification of a displayed surface
+\begin{equation}
+  S=\sum_e c_e\omega_e+\sum_a d_a p_a^0+c
+\end{equation}
+
+defines an $E$-surface when all non-zero internal coefficients $c_e$ have the same sign, and an $H$-surface when both signs occur.  This is the convention used by the pretty printer.
+
+\chapter{The one-loop dotted box in detail}
+
+\section{Routing and repeated split}
+
+Consider a one-loop box whose ordinary edges are $0,1,2$ and whose repeated channel is represented by three copies $3,4,5$.  Choose the repeated channel energy as
+\begin{equation}
+  z=q_3^0=q_4^0=q_5^0
+\end{equation}
+on the localized support, and write the ordinary edge energies as
+\begin{equation}
+  q_i^0=z+\Delta_i,
+  \qquad i=0,1,2,
+\end{equation}
+where each $\Delta_i$ is a fixed external-energy shift.  The original energy integral at fixed $\vec\ell$ is
+\begin{equation}
+  I_{\Box}^{0}(\vec\ell)
+  =\int\frac{\dd z}{2\pi}
+  \frac{N(z+\Delta_0,z+\Delta_1,z+\Delta_2,z,z,z)}
+  {\prod_{i=0}^{2}D_i(z+\Delta_i)\;D_3(z)D_4(z)D_5(z)}.
+  \label{eq:box-original-energy}
+\end{equation}
+The localized copy form is
+\begin{align}
+  I_{\Box}^{0}(\vec\ell)
+   & =\int\frac{\dd z}{2\pi}\prod_{a=3}^{5}\frac{\dd z_a}{2\pi}
+  \int\prod_{a=3}^{5}\dd\tau_a
+  \;N^\sharp(z+\Delta_0,z+\Delta_1,z+\Delta_2,z_3,z_4,z_5)
+  \notag                                                        \\
+   & \quad\times
+  \frac{\exp\{\ii\tau_3(z_3-z)+\ii\tau_4(z_4-z)+\ii\tau_5(z_5-z)\}}
+  {\prod_{i=0}^{2}D_i(z+\Delta_i)D_3(z_3)D_4(z_4)D_5(z_5)}.
+  \label{eq:box-localized}
+\end{align}
+Let
+\begin{equation}
+  T=\tau_3+\tau_4+\tau_5.
+\end{equation}
+Then the $z$ integral carries the exponential $e^{-\ii Tz}$, so the contour closure is determined by $\sgn T$ exactly as in \eqref{eq:closure-rule}.
+
+\section{Copy residues and copy signs}
+
+For $a=3,4,5$, define
+\begin{equation}
+  \sigma_a=-\sgn\tau_a,
+  \qquad
+  \tau_a=-\sigma_a\alpha_a,
+  \qquad \alpha_a>0.
+\end{equation}
+Then the copy-energy residues give
+\begin{equation}
+  z_a=\sigma_a\omega_a,
+  \qquad a=3,4,5.
+\end{equation}
+The remaining phase involving $z$ is governed by
+\begin{equation}
+  T=-(\sigma_3\alpha_3+\sigma_4\alpha_4+\sigma_5\alpha_5),
+\end{equation}
+and hence
+\begin{equation}
+  \chi=-\sgn(\sigma_3\alpha_3+\sigma_4\alpha_4+\sigma_5\alpha_5).
+\end{equation}
+For example, for the copy signs $(\sigma_3,\sigma_4,\sigma_5)=(+,-,-)$ both values of $\chi$ occur in different regions of the positive $(\alpha_3,\alpha_4,\alpha_5)$ octant.  For $(+,+,+)$ only one value occurs.
+
+\section{The z-contour and the shifted skeleton surfaces}
+
+For fixed $\chi$, the $z$ contour closure is fixed.  The ordinary denominators are
+\begin{equation}
+  D_i(z+\Delta_i)= (z+\Delta_i-\omega_i+\ii0)(z+\Delta_i+\omega_i-\ii0).
+\end{equation}
+Equivalently, after using the global residue theorem one may choose the chain-pole representation, in which the repeated channel fixes the chain value
+\begin{equation}
+  z=z_\chi,
+  \qquad z_\chi=\chi\,\omega_\star,
+  \label{eq:z-chi}
+\end{equation}
+where $\omega_\star$ is the canonical on-shell energy of the repeated channel.  The skeleton denominators then become the dual factors
+\begin{align}
+  D_i(z_\chi+\Delta_i)
+   & =(z_\chi+\Delta_i-\omega_i)(z_\chi+\Delta_i+\omega_i)
+  \notag                                                   \\
+   & =S_{i,-}(\chi)S_{i,+}(\chi),
+\end{align}
+with
+\begin{equation}
+  S_{i,-}(\chi)=\chi\omega_\star-\omega_i+\Delta_i,
+  \qquad
+  S_{i,+}(\chi)=\chi\omega_\star+\omega_i+\Delta_i.
+  \label{eq:box-skeleton-surfaces}
+\end{equation}
+These are precisely the surfaces that appear as the LTD skeleton part of the hybrid expression.  Depending on the signs of the internal-energy coefficients they are displayed as either $E$- or $H$-surfaces.
+
+\section{The remaining tau integral for the box}
+
+Using \eqref{eq:z-chi}, the cone phase for the repeated group is
+\begin{align}
+  \Phi_{\Box}(\alpha;\sigma,\chi)
+   & =-\sum_{a=3}^{5}\alpha_a\omega_a
+  +(\sigma_3\alpha_3+\sigma_4\alpha_4+\sigma_5\alpha_5)z_\chi
+  \notag                                                                     \\
+   & =-\sum_{a=3}^{5}\alpha_a\left(\omega_a-\sigma_a\chi\omega_\star\right).
+\end{align}
+Thus the local repeated block is
+\begin{equation}
+  \CFF_{345}(\sigma_3,\sigma_4,\sigma_5|\chi)
+  =\int_{\VC(\sigma,\chi)}\dd^3\alpha\;
+  \exp\left[-\ii\sum_{a=3}^{5}\alpha_a
+    (\omega_a-\sigma_a\chi\omega_\star)
+    \right].
+  \label{eq:box-local-cff}
+\end{equation}
+The CFF contraction of this cone produces a factorized tree of inverse linear surfaces.  The important point is that all ordinary-edge shifts in \eqref{eq:box-skeleton-surfaces} are already fixed before the cone integral is evaluated.  Therefore the local CFF block is shifted by the chain sign and by the chosen skeleton chain value.
+
+\section{Final dotted-box hybrid expression}
+
+Combining the residue prefactors, skeleton surfaces, local cone factor and numerator substitution map gives
+\begin{align}
+  I_{\Box,\rm hyb}^{(3D)}(\vec\ell)
+   & =\sum_{\sigma\in\{\pm1\}^3}
+  \sum_{\chi:\VC(\sigma,\chi)\neq\emptyset}
+  \left[
+    \frac{\mathcal P(\sigma,\chi)}
+    {\prod_{i=0}^{2}S_{i,-}(\chi)S_{i,+}(\chi)}
+    \;\CFF_{345}(\sigma|\chi)
+    \;N^\sharp_{\sigma,\chi}
+    \right],
+  \label{eq:box-final}
+\end{align}
+where
+\begin{equation}
+  N^\sharp_{\sigma,\chi}
+  =N^\sharp\bigl(
+  z_\chi+\Delta_0,
+  z_\chi+\Delta_1,
+  z_\chi+\Delta_2,
+  \sigma_3\omega_3,
+  \sigma_4\omega_4,
+  \sigma_5\omega_5
+  \bigr).
+  \label{eq:box-numerator-map}
+\end{equation}
+This is exactly the structure exported by the Python build command for the box:
+\begin{equation}
+  \hbox{orientation label } 000\sigma_3\sigma_4\sigma_5|\chi,
+\end{equation}
+with zero signs on ordinary edges, individual signs on repeated edges, and one chain sign after the vertical bar.  The expression \eqref{eq:box-final} is pointwise equal to the split-mass simple-propagator LTD representation in the limit where the repeated masses are identified, and it is also pointwise equal to the pure CFF representation of the same localized graph.
+
+\chapter{Python implementation and tests}
+
+\section{DOT-only input}
+
+The current package is DOT-only.  The graph file provides internal edge labels such as
+\begin{lstlisting}
+v0 -> v1 [label="k1 - p1", mass="mA"];
+\end{lstlisting}
+If the \texttt{mass} attribute is absent, the edge is massless.  If \texttt{mass="mA"} is present, the numerical value is supplied later through \texttt{--masses '{"mA": ...}'}.  Equal mass labels are used to decide which repeated channels can be merged into repeated sets.  The \texttt{pow} attribute is not supported.
+
+Repeated channels are represented by distinct graph edges, not by a fake powered edge.  For example, a triple repeated box channel has three separate internal edges with the same canonical routing and mass key.  This is necessary because the orientation and numerator substitution map are edge-wise.
+
+\section{JSON structure}
+
+The exported JSON is intentionally dependent on the DOT graph.  It stores only the non-redundant expression data:
+\begin{itemize}[leftmargin=2em]
+  \item the family, backend, loop and external names;
+  \item a surface cache, where each surface is a compact linear expression in internal \(\OSE[e]\) and external \(\ExtE[a]\);
+  \item a list of orientations;
+  \item for every orientation, a factorized tree of surface ids;
+  \item for every orientation, explicit loop-energy and edge-energy substitution maps.
+\end{itemize}
+The evaluator reconstructs spatial momenta and masses from the DOT file and the numeric inputs, then evaluates the JSON tree directly.  Mutating either a surface in the JSON or an edge substitution in the JSON changes the result in the regression tests; this guards against accidentally bypassing the exported structure.
+
+\section{Pretty output}
+
+The command
+\begin{lstlisting}
+python hybrid3d.py build --family hybrid --dot examples/box_pow3.dot --pretty
+\end{lstlisting}
+prints:
+\begin{itemize}[leftmargin=2em]
+  \item graph and repeated-channel summary;
+  \item a surface cache with each surface classified as \texttt{e} or \texttt{h};
+  \item an orientation summary;
+  \item optional details for a single orientation with \texttt{--show-details-for-orientation LABEL}.
+\end{itemize}
+For example,
+\begin{lstlisting}
+python hybrid3d.py build --family hybrid --dot examples/box_pow3.dot \
+  --pretty --show-details-for-orientation '000+--|+'
+\end{lstlisting}
+shows the substitution map corresponding to \eqref{eq:box-numerator-map}.
+
+\section{The diagnostic test command}
+
+The command
+\begin{lstlisting}
+python hybrid3d.py test --dot examples/box_pow3.dot
+\end{lstlisting}
+performs a three-way diagnostic:
+\begin{enumerate}[leftmargin=2em]
+  \item build/evaluate the pure CFF structure;
+  \item build/evaluate the hybrid structure;
+  \item compare against a split-mass LTD sequence in which the repeated mass labels are temporarily separated and then sent back together.
+\end{enumerate}
+The split-mass LTD sequence is the most conservative numerical reference, because before the limit all propagators are simple and ordinary LTD applies without higher-order residues.
+
+\section{Current test coverage}
+
+The regression suite covers:
+\begin{itemize}[leftmargin=2em]
+  \item validation of all shipped DOT examples except the intentionally invalid noisy graph;
+  \item absence of doubled external-energy shifts in CFF surfaces;
+  \item presence and evaluation of LTD skeleton surfaces inside the hybrid tree;
+  \item JSON-driven mutation sensitivity of both surfaces and edge substitutions;
+  \item family-distinct structures for repeated-channel graphs;
+  \item box tests with dot-product numerators on ordinary and repeated edges;
+  \item the proper iterated sandwiched-bubble example with numerator insertions;
+  \item a Mercedes repeated-channel example.
+\end{itemize}
+
+\section{Relation between theory and code}
+
+The correspondence between equations and code is:
+\begin{center}
+  \begin{tabular}{>{\raggedright}p{0.37\linewidth}>{\raggedright\arraybackslash}p{0.52\linewidth}}
+    \toprule
+    Theory object                                & Implementation object                                       \\
+    \midrule
+    Internal on-shell energy $\omega_e$          & Display token \texttt{OSE[e]}                               \\
+    External energy $p_a^0$                      & Display token \texttt{E[a]}                                 \\
+    Repeated set $R_g$                           & Canonical routing/mass equivalence class of internal edges  \\
+    Copy sign $\sigma_{g,a}$                     & Edge sign before the vertical bar in \texttt{orient\_label} \\
+    Chain sign $\chi_g$                          & Sign after the vertical bar in \texttt{orient\_label}       \\
+    Cone integral $\CFF_g$                       & Factorized tree nodes attached to the orientation           \\
+    Skeleton surfaces $S_{i,\pm}$                & Surface ids in the same evaluated tree                      \\
+    Numerator substitution $\VQ_{b,\sigma,\chi}$ & Stored \texttt{loop\_q0} and \texttt{edge\_q0} maps         \\
+    \bottomrule
+  \end{tabular}
+\end{center}
+
+\begin{thebibliography}{9}
+  \bibitem{ltd-prl}
+  S. Catani, T. Gleisberg, F. Krauss, G. Rodrigo and J.-C. Winter, and subsequent multiloop LTD developments; see the LTD derivation used in arXiv:1906.06138.
+  \bibitem{cff-main}
+  Z. Capatti et al., Capatti--Feynman--Forest / causal representation derivations, arXiv:2211.09653.
+  \bibitem{box-paper}
+  Pedagogical box derivation of the CFF representation, arXiv:2311.14374.
+  \bibitem{cltd-code}
+  The \texttt{cLTD} Mathematica implementation and the gammaLoop CFF generation code, \url{https://github.com/alphal00p/cLTD} and \url{https://github.com/alphal00p/gammaloop}.
+\end{thebibliography}
+
+\end{document}

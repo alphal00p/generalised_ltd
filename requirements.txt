@@ -1,0 +1,5 @@
+mpmath
+pydot
+prettytable
+colorama
+pytest
