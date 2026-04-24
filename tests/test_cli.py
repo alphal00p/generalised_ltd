@@ -39,10 +39,15 @@ def test_cff_box_contains_nontrivial_contraction_branch():
         for node in orient['tree']['nodes']
     )
 
-def test_hybrid_repeated_box_uses_separate_cff_kernel_labels():
+def test_hybrid_repeated_box_uses_local_cone_labels():
     data = build_structure(dot('box_pow3.dot'), 'hybrid')
-    assert any(o['orient_label'].endswith('|cff') for o in data['orientations'])
-    assert all(o['meta']['source'] == 'hybrid_repeated_cff_contraction_kernel' for o in data['orientations'])
+    assert any('|' in o['orient_label'] for o in data['orientations'])
+    assert all(o['meta']['source'] == 'hybrid_ltd_local_cone' for o in data['orientations'])
+
+def test_multiloop_hybrid_uses_coupled_cone_kernel():
+    data = build_structure(dot('sunrise_pow4.dot'), 'hybrid')
+    assert any(o['orient_label'].endswith('|coupled') for o in data['orientations'])
+    assert all(o['meta']['source'] == 'hybrid_coupled_cff_cone_kernel' for o in data['orientations'])
 
 def test_json_evaluator_consumes_surface_tree_and_substitution_map():
     d = dot('box_pow3.dot')
@@ -71,7 +76,7 @@ def test_family_structures_differ_for_repeated_box():
     hyb = build_structure(d, 'hybrid')
     assert len(ltd['orientations']) != len(cff['orientations'])
     assert [o['orient_label'] for o in hyb['orientations']] != [o['orient_label'] for o in cff['orientations']]
-    assert any(o['orient_label'].endswith('|cff') for o in hyb['orientations'])
+    assert any('|' in o['orient_label'] for o in hyb['orientations'])
     assert all('|' not in o['orient_label'] for o in cff['orientations'])
 
 def test_three_way_box_with_edge_numerator_reports_convergence():
@@ -120,6 +125,34 @@ def test_three_way_report_runs_for_every_valid_example(name, numerator):
     'proper_iterated_sandwiched_bubble.dot',
     'mercedes_multi_repeats.dot',
 ])
+def test_cff_hybrid_match_all_edge_dot_numerators_for_every_valid_example(name):
+    d = dot(name)
+    parsed = GIO.parse_dot_graph(d)
+    ext4, loop3, default_masses = __import__('hybrid3d_core.api').api._random_default_inputs(d, 1337)
+    masses = {**default_masses, **ALL_MASSES}
+    cff_data = build_structure(d, 'cff')
+    hybrid_data = build_structure(d, 'hybrid')
+    numerators = ['1']
+    if parsed.ext_names:
+        numerators.extend(f'dot(edges[{i}], ext[0])' for i in range(len(parsed.internal_edges)))
+    if len(parsed.internal_edges) >= 4:
+        numerators.append('dot(edges[0], edges[3])')
+    else:
+        numerators.append('dot(edges[0], edges[-1])')
+    for numerator in numerators:
+        cff = evaluate_structure(cff_data, d, ext4, loop3, numerator, 80, masses)
+        hybrid = evaluate_structure(hybrid_data, d, ext4, loop3, numerator, 80, masses)
+        assert abs(cff - hybrid) < 1e-65, (name, numerator, cff, hybrid)
+
+@pytest.mark.parametrize('name', [
+    'box_pow3.dot',
+    'sunrise_pow4.dot',
+    'kite_double_nested_repeats.dot',
+    'kite_nested_repeats.dot',
+    'kite_sandwich_repeats.dot',
+    'proper_iterated_sandwiched_bubble.dot',
+    'mercedes_multi_repeats.dot',
+])
 def test_split_mass_pure_cff_matches_split_mass_pure_ltd_for_every_valid_example(name):
     d = dot(name)
     parsed = GIO.parse_dot_graph(d)
@@ -131,10 +164,7 @@ def test_split_mass_pure_cff_matches_split_mass_pure_ltd_for_every_valid_example
     ltd_data = build_structure(split_dot, 'ltd')
     numerators = ['1']
     if parsed.ext_names:
-        numerators.extend([
-            'dot(edges[0], ext[0]) + dot(edges[-1], ext[0])',
-            'dot(edges[len(edges)//2], ext[0]) + dot(edges[-1], ext[0])',
-        ])
+        numerators.extend(f'dot(edges[{i}], ext[0])' for i in range(len(parsed.internal_edges)))
     if len(parsed.internal_edges) >= 4:
         numerators.append('dot(edges[0], edges[3])')
     else:

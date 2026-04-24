@@ -52,7 +52,7 @@
 \begin{document}
 \maketitle
 \begin{abstract}
-  This note records a self-contained derivation of the hybrid representation implemented in the current DOT-only prototype.  The purpose is narrow: repeated propagator powers are represented by distinct graph edges with identical momentum routing and identical symbolic mass key; the representation then combines ordinary LTD on the non-repeated part with a local CFF/Fourier treatment of the repeated channel.  The central point is the order of operations.  Localizing deltas are written in Fourier form.  At fixed Fourier parameters, the energy integrals are ordinary Feynman energy integrals multiplied by complex exponentials; the sign of the corresponding Fourier combination fixes whether the contour must be closed above or below.  After this LTD step, the remaining Fourier integrals are precisely cone integrals of the CFF type, shifted by the already-chosen LTD/on-shell chain data.  A single extra chain sign per repeated channel is enough to encode this contour information.  The final orientation label is therefore an edge-sign string together with one chain-sign string, and the exported JSON stores the resulting numerator substitution map explicitly for every original edge.
+  This note records a self-contained derivation of the hybrid representation implemented in the current DOT-only prototype.  The purpose is narrow: repeated propagator powers are represented by distinct graph edges with identical momentum routing and identical symbolic mass key.  For one-loop repeated-channel graphs the representation combines ordinary LTD on the non-repeated part with a local CFF/Fourier treatment of the repeated channel.  The central point is the order of operations.  Localizing deltas are written in Fourier form.  At fixed Fourier parameters, the energy integrals are ordinary Feynman energy integrals multiplied by complex exponentials; the sign of the corresponding Fourier combination fixes whether the contour must be closed above or below.  After this LTD step, the remaining Fourier integrals are cone integrals of the CFF type, shifted by the already-chosen LTD/on-shell chain data.  In multi-loop graphs, however, the repeated-sector Fourier sums generally couple in the contour-closure inequalities; the implementation therefore uses a coupled CFF-cone kernel for those cases rather than the invalid product of independent local cones.  The final orientation label stores the edge-sign string together with either local chain signs or a coupled-cone marker, and the exported JSON stores the resulting numerator substitution map explicitly for every original edge.
 \end{abstract}
 \tableofcontents
 
@@ -320,6 +320,12 @@ The integral \eqref{eq:cone-integral} is exactly a CFF cone integral: the cone i
 \end{equation}
 while non-simplicial cones are decomposed into a sum of such products.  This is the same operation performed by the ordinary CFF graph-contraction algorithm; the only difference is the shift $Q_{g,b}^0(\chi)$ inherited from the earlier LTD step.
 
+The product over independent factors \(\CFF_g\) is a one-loop or otherwise decoupled repeated-sector formula.  In a general multi-loop graph a chosen energy-basis coordinate \(u_j\) sees the Fourier coefficient
+\begin{equation}
+  \Lambda_j(\tau)=\sum_g c_{gj}T_g(\tau),
+\end{equation}
+where \(Q_g^0=\sum_j c_{gj}u_j+\hbox{external shifts}\).  The closure condition is then \(\sgn\Lambda_j\), not the sign of a single \(T_g\).  Dependent or overlapping repeated channels therefore define one coupled polyhedral cone in all repeated-copy \(\alpha\)-variables.  Treating that cone as a product of the individual \(\VC_g\) misses residues; this is the failure mode exposed by the sunrise and nested-kite examples.  The code consequently evaluates such sectors with the coupled CFF-cone kernel.
+
 \section{Hybrid orientation and numerator substitution map}
 
 An exported hybrid orientation is
@@ -459,7 +465,7 @@ For fixed $\chi$, the $z$ contour closure is fixed.  The ordinary denominators a
 \begin{equation}
   D_i(z+\Delta_i)= (z+\Delta_i-\omega_i+\ii0)(z+\Delta_i+\omega_i-\ii0).
 \end{equation}
-Equivalently, after using the global residue theorem one may choose the chain-pole representation, in which the repeated channel fixes the chain value
+In this one-loop example, after using the global residue theorem one may choose the chain-pole representation, in which the repeated channel fixes the chain value
 \begin{equation}
   z=z_\chi,
   \qquad z_\chi=\chi\,\omega_\star,
@@ -480,6 +486,8 @@ with
   \label{eq:box-skeleton-surfaces}
 \end{equation}
 These are precisely the surfaces that appear as the LTD skeleton part of the hybrid expression.  Depending on the signs of the internal-energy coefficients they are displayed as either $E$- or $H$-surfaces.
+
+This chain-pole shortcut is not a valid general multi-loop rule.  After copy localization, repeated denominators live in the copy variables \(z_{g,a}\); a repeated-channel value \(z=z_\chi\) is not automatically an available pole of every remaining energy integral.  The safe statement is the fixed-\(\tau\) closure rule above, followed either by the validated one-loop local cone or by the coupled cone construction.
 
 \section{The remaining tau integral for the box}
 
@@ -605,6 +613,7 @@ The regression suite covers:
   \item family-distinct structures for repeated-channel graphs;
   \item box tests with dot-product numerators on ordinary and repeated edges;
   \item the proper iterated sandwiched-bubble example with numerator insertions;
+  \item edge-by-edge dot-product numerator comparisons on every valid shipped example;
   \item a Mercedes repeated-channel example.
 \end{itemize}
 
