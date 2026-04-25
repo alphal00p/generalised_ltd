@@ -140,6 +140,23 @@ def _render_profile_table(rows, use_color: bool = True) -> str:
     return str(table)
 
 
+def _profile_warnings(rows) -> list[str]:
+    labels = sorted({
+        str(row.get('label', '?'))
+        for row in rows
+        if row.get('family') == 'ltd' and row.get('has_repeated_propagators')
+    })
+    if not labels:
+        return []
+    label_text = ', '.join(labels)
+    return [
+        'Reminder: LTD profiling rows for repeated-propagator graphs '
+        f'({label_text}) do not include numerator derivatives and are not the '
+        'valid repeated-propagator LTD formula. Use the mass-shift LTD test for '
+        'physics comparisons; these rows are only runtime/structural references.'
+    ]
+
+
 def _split_backends_arg(value: str | None):
     if not value:
         return None
@@ -162,6 +179,7 @@ def _profile_symbolica_targets(targets, dot, ext4, loop3, masses, batch_size: in
                 continue
             metadata = SYMEVAL.symbolica_evaluator_metadata(data, mode)
             graph = data.get('graph', {})
+            repeated_groups = graph.get('repeated_groups', [])
             val, profile = SYMEVAL.evaluate_symbolica(
                 data,
                 dot,
@@ -184,6 +202,7 @@ def _profile_symbolica_targets(targets, dot, ext4, loop3, masses, batch_size: in
                 'value_type': metadata.get('value_type', '?'),
                 'internal_edges': graph.get('n_internal_edges', '?'),
                 'external_symbols': len(graph.get('ext_names', [])) if isinstance(graph.get('ext_names'), list) else '?',
+                'has_repeated_propagators': bool(repeated_groups),
                 'orientations': len(data.get('orientations', [])),
                 'maps': metadata.get('map_count', '?'),
                 'per_sample': SYMEVAL.format_duration(seconds),
@@ -193,6 +212,8 @@ def _profile_symbolica_targets(targets, dot, ext4, loop3, masses, batch_size: in
                 'seconds_per_sample': seconds,
             })
     print(_render_profile_table(rows, use_color=use_color))
+    for warning in _profile_warnings(rows):
+        print(_color(warning, Fore.YELLOW + Style.BRIGHT, use_color))
 
 
 def cmd_validate(args):

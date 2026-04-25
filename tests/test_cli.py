@@ -18,6 +18,7 @@ from src.orientation_bundle import (
 )
 from src.structure import minimal_structure_from_bundle, evaluate_minimal_bundle
 from src.structure import numerator_from_expr
+from hybrid3d import _profile_warnings
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BOX_MASSES = {"m1":0.8,"m2":1.1,"m3":0.9,"m4":1.2}
@@ -219,6 +220,17 @@ def test_one_loop_10_external_graph_shape():
     assert validation['n_external_symbols'] == 10
     assert validation['n_external_edges'] == 10
     assert validation['repeated_groups'] == []
+
+def test_profile_warning_for_ltd_repeated_propagator_rows():
+    warnings = _profile_warnings([
+        {'label': 'ltd-ref', 'family': 'ltd', 'has_repeated_propagators': True},
+        {'label': 'hybrid', 'family': 'hybrid', 'has_repeated_propagators': True},
+        {'label': 'ltd-plain', 'family': 'ltd', 'has_repeated_propagators': False},
+    ])
+    assert len(warnings) == 1
+    assert 'ltd-ref' in warnings[0]
+    assert 'mass-shift LTD test' in warnings[0]
+    assert 'numerator derivatives' in warnings[0]
 
 def test_graph_from_signatures_cli_stdout_round_trips_prop_expression():
     expr = 'prop(k1+p1,mA)*prop(k1+p1-q1,mB)*prop(k1-p2+q2,mC)*prop(k1,mD)'
