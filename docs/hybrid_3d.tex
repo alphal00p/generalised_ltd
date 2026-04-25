@@ -612,6 +612,42 @@ derivative part is exported as a sum of ordinary surface products with repeated
 surface ids, possibly under \texttt{variants}.  Thus the same evaluator consumes
 pure CFF, pure LTD, and hybrid CFF JSON.
 
+\section{Bounded-degree CFF completion}
+
+The pure CFF builder also accepts optional per-edge bounds \(d_e\) on the power
+of each EMR edge energy in the numerator.  These bounds are not needed for the
+ordinary affine tests, but they make it possible to decide whether higher powers
+can be represented by finite-pole data alone.
+
+For each loop-energy variable \(k_i^0\), the implementation computes the
+conservative one-variable degree estimate
+\[
+  \delta_i
+  =
+  \sum_{e:\, \partial q_e^0/\partial k_i^0\ne0} d_e
+  -
+  2\,\#\{e:\, \partial q_e^0/\partial k_i^0\ne0\}.
+\]
+The bounded-degree CFF completion is only emitted if every \(\delta_i<-1\).
+Otherwise the command fails, because an infinity arc could contribute and no
+finite black-box sample formula is determined by the CFF pole data alone.
+
+When the bounds are convergent but exceed the ordinary affine-safe class, the
+JSON emitted for \texttt{family=cff} is a finite-pole completion:
+\[
+  \text{ordinary CFF}
+  +
+  \bigl(\text{finite LTD pole sum}-\text{ordinary CFF}\bigr).
+\]
+The second parenthesis is stored explicitly as contact/infinity-correction
+orientations, not as evaluator-side hidden logic.  Thus the same JSON evaluator
+still performs only the standard operation: evaluate the black-box numerator at
+the emitted energy map and multiply by the emitted prefactor, half-edge factors,
+and surface tree.  This is deliberately conservative.  It proves that a
+bounded, UV-convergent black-box numerator can be handled without rerouting the
+input topology, while leaving the harder task of recombining the contact sector
+into a compact purely causal CFF normal form for later work.
+
 \section{Testing requirements}
 
 For any repeated graph, a valid three-way test must check both numerical agreement and structural independence:
@@ -624,6 +660,11 @@ For any repeated graph, a valid three-way test must check both numerical agreeme
   \item physical numerator maps must have no non-zero constant energy shifts;
   \item hybrid must collapse structurally to LTD when no repeated group is present.
 \end{itemize}
+
+For bounded-degree CFF tests, the suite checks that quadratic or cubic EMR
+energy numerators agree against LTD on split-mass versions of the existing
+one-loop, multiloop, and five-loop examples, and that deliberately divergent
+degree bounds are rejected before evaluation.
 
 \section{Current prototype status}
 

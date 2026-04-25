@@ -109,3 +109,11 @@ For CFF surfaces, external shifts are inferred from the internal momentum routin
 The `test` subcommand reports a three-way numerical diagnostic.  It now always evaluates the exported CFF JSON and hybrid JSON directly, and reports the split-mass LTD sequence as an independent limiting reference.  Optional `--cff-json` and `--hybrid-json` inputs can be supplied to make the diagnostic use prebuilt JSON instead of rebuilding both structures.
 
 The CFF tree generator expands all acyclic contractions of the selected source/sink boundary, so non-simplicial orientations are represented as genuine sums in the JSON tree.  All repeated-channel graphs, including the dotted box, now use the coupled CFF-cone kernel with a separate hybrid orientation namespace.  This keeps repeated copies as separate edge labels and avoids artificial H- or E-surfaces with internal-energy coefficients such as `2*OSE[i]`; repeated-copy sums are represented as `OSE[i] + OSE[j]`.  Graphs without repeated channels still collapse to the ordinary LTD bundle.
+
+Pure CFF can also be built with explicit EMR energy-degree bounds:
+
+```bash
+python3 hybrid3d.py build --family cff --dot examples/box_pow3.dot --energy-degree-bounds 0:2
+```
+
+When a supplied bound exceeds the ordinary affine-safe class, the builder first checks the per-loop `k_i^0` UV degree.  If every energy contour is convergent, it emits a bounded-degree finite-pole completion as ordinary JSON contact sectors; otherwise it rejects the build because a residue at infinity is possible.  The helper command `test-cff-ltd` compares such a bounded CFF JSON against LTD for a chosen numerator expression.

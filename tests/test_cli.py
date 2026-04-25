@@ -3,7 +3,7 @@ from fractions import Fraction
 import pytest
 import mpmath as mp
 
-from hybrid3d_core.api import load_dot_graph, validate_graph, build_structure, evaluate_structure, compare_three_modes, run_test
+from hybrid3d_core.api import load_dot_graph, validate_graph, build_structure, evaluate_structure, compare_three_modes, run_test, run_cff_ltd_test
 from hybrid3d_core import graph_io as GIO
 from hybrid3d_core.structure import numerator_from_expr
 
@@ -375,3 +375,63 @@ def test_split_mass_pure_cff_ltd_numerator_agreement_improves_with_precision():
         ltd = evaluate_structure(ltd_data, split_dot, ext4, loop3, numerator, dps, split_masses)
         diffs.append(abs(cff - ltd))
     assert diffs[1] < diffs[0] * 1e-25
+
+@pytest.mark.parametrize('name,masses', [
+    ('box_pow3.dot', BOX_MASSES),
+    ('sunrise_pow4.dot', ALL_MASSES),
+    ('proper_iterated_sandwiched_bubble.dot', ITER_MASSES),
+    ('five_loop_ultimate_basis1.dot', ULTIMATE_MASSES),
+])
+def test_bounded_degree_cff_matches_ltd_for_quadratic_edge_energy(name, masses):
+    d = dot(name)
+    parsed = GIO.parse_dot_graph(d)
+    split_dot, _ = GIO.build_split_mass_dot(d)
+    ext4, loop3, default_masses = __import__('hybrid3d_core.api').api._random_default_inputs(split_dot, 1337)
+    split_masses = GIO.build_split_mass_assignments(parsed, {**default_masses, **masses}, '0.001')
+    cff_data = build_structure(split_dot, 'cff', energy_degree_bounds={0: 2})
+    ltd_data = build_structure(split_dot, 'ltd')
+    assert cff_data['backend'] == 'bounded_degree_bundle'
+    assert cff_data['graph']['energy_divergence']['convergent'] is True
+    assert any(o['meta']['source'] == 'bounded_degree_ltd_contact_part' for o in cff_data['orientations'])
+
+    numerator = 'edges[0][0]**2'
+    cff = evaluate_structure(cff_data, split_dot, ext4, loop3, numerator, 80, split_masses)
+    ltd = evaluate_structure(ltd_data, split_dot, ext4, loop3, numerator, 80, split_masses)
+    assert abs(cff - ltd) < mp.mpf('1e-65'), (name, cff, ltd)
+
+def test_bounded_degree_cff_repairs_known_quadratic_cff_ltd_mismatch():
+    d = dot('box_pow3.dot')
+    parsed = GIO.parse_dot_graph(d)
+    split_dot, _ = GIO.build_split_mass_dot(d)
+    ext4, loop3, default_masses = __import__('hybrid3d_core.api').api._random_default_inputs(split_dot, 1337)
+    split_masses = GIO.build_split_mass_assignments(parsed, {**default_masses, **BOX_MASSES}, '0.001')
+    numerator = 'edges[0][0]**2'
+    ordinary = evaluate_structure(build_structure(split_dot, 'cff'), split_dot, ext4, loop3, numerator, 80, split_masses)
+    bounded = evaluate_structure(build_structure(split_dot, 'cff', energy_degree_bounds={0: 2}), split_dot, ext4, loop3, numerator, 80, split_masses)
+    ltd = evaluate_structure(build_structure(split_dot, 'ltd'), split_dot, ext4, loop3, numerator, 80, split_masses)
+    assert abs(ordinary - ltd) > mp.mpf('1e-3')
+    assert abs(bounded - ltd) < mp.mpf('1e-65')
+
+def test_bounded_degree_cff_rejects_nonconvergent_energy_bounds():
+    d = dot('box_pow3.dot')
+    split_dot, _ = GIO.build_split_mass_dot(d)
+    with pytest.raises(ValueError, match='residue at infinity'):
+        build_structure(split_dot, 'cff', energy_degree_bounds={'*': 20})
+
+def test_cff_ltd_test_helper_uses_bounded_degree_cff():
+    d = dot('box_pow3.dot')
+    parsed = GIO.parse_dot_graph(d)
+    split_dot, _ = GIO.build_split_mass_dot(d)
+    ext4, loop3, default_masses = __import__('hybrid3d_core.api').api._random_default_inputs(split_dot, 1337)
+    split_masses = GIO.build_split_mass_assignments(parsed, {**default_masses, **BOX_MASSES}, '0.001')
+    rep = run_cff_ltd_test(
+        split_dot,
+        ext4=ext4,
+        loop3=loop3,
+        numerator_expr='edges[0][0]**3',
+        dps=80,
+        mass_map=split_masses,
+        energy_degree_bounds={0: 3},
+    )
+    assert mp.mpf(rep['abs_cff_minus_ltd']) < mp.mpf('1e-65')
+    assert rep['energy_divergence']['convergent'] is True

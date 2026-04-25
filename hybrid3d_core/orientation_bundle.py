@@ -714,6 +714,70 @@ def _enumerate_cff_branches(graph,surface_builder,parsed,branch_acc):
             emitted=True
     if not emitted: branch_acc.append((sid,))
 
+def normalize_energy_degree_bounds(bounds: Any, n_internal: int) -> Optional[Tuple[int, ...]]:
+    if bounds is None:
+        return None
+    if isinstance(bounds, (list, tuple)):
+        if len(bounds) > n_internal:
+            raise ValueError(f'Energy-degree bound list has {len(bounds)} entries for {n_internal} internal edges')
+        out = [0] * n_internal
+        for i, value in enumerate(bounds):
+            out[i] = int(value)
+    elif isinstance(bounds, dict):
+        default = int(bounds.get('*', 0))
+        out = [default] * n_internal
+        for key, value in bounds.items():
+            if str(key) == '*':
+                continue
+            idx = int(key)
+            if idx < 0 or idx >= n_internal:
+                raise ValueError(f'Energy-degree bound edge index {idx} is outside 0..{n_internal - 1}')
+            out[idx] = int(value)
+    else:
+        raise TypeError('Energy-degree bounds must be a list/tuple or a dict')
+    for idx, value in enumerate(out):
+        if value < 0:
+            raise ValueError(f'Energy-degree bound for edge {idx} is negative: {value}')
+    return tuple(out)
+
+def energy_divergence_report(signatures: Sequence[Signature], bounds: Any):
+    bounds_tuple = normalize_energy_degree_bounds(bounds, len(signatures))
+    if bounds_tuple is None:
+        return None
+    n_loops = len(signatures[0][0]) if signatures else 0
+    loops = []
+    for loop_id in range(n_loops):
+        active_edges = [edge_id for edge_id, sig in enumerate(signatures) if int(sig[0][loop_id]) != 0]
+        numerator_degree = sum(bounds_tuple[edge_id] for edge_id in active_edges)
+        denominator_degree = 2 * len(active_edges)
+        divergence_degree = numerator_degree - denominator_degree
+        loops.append({
+            'loop': loop_id,
+            'active_edges': active_edges,
+            'numerator_degree_bound': numerator_degree,
+            'denominator_degree': denominator_degree,
+            'divergence_degree': divergence_degree,
+            'convergent': divergence_degree < -1,
+        })
+    return {
+        'edge_degree_bounds': list(bounds_tuple),
+        'loops': loops,
+        'convergent': all(item['convergent'] for item in loops),
+    }
+
+def assert_energy_uv_convergent(signatures: Sequence[Signature], bounds: Any):
+    report = energy_divergence_report(signatures, bounds)
+    if report is None:
+        return None
+    bad = [item for item in report['loops'] if not item['convergent']]
+    if bad:
+        details = ', '.join(
+            f"k{item['loop']}^0: degree {item['divergence_degree']} from edges {item['active_edges']}"
+            for item in bad
+        )
+        raise ValueError(f'Energy-degree bounds leave non-vanishing residue at infinity ({details})')
+    return report
+
 def build_pure_cff_bundle(parsed):
     n_internal=len(parsed.internal_edges); signatures=tuple(e.signature for e in parsed.internal_edges); n_external=len(parsed.ext_names); basis=choose_basis_indices(signatures); sb=SurfaceCacheBuilder(); base=build_base_graph_from_parsed(parsed); terms=[]; bc=0
     overall_sign=-1 if (len(signatures[0][0])-1+_duplicate_signature_excess(signatures)) % 2 else 1
@@ -733,6 +797,105 @@ def build_pure_cff_bundle(parsed):
         for chain in chains:
             terms.append(OrientationTerm(orientation_id_from_signs(signs),'pure_cff',bc,tuple(signs),overall_sign,tuple(range(n_internal)),chain,loop_exprs,edge_exprs,{'basis':list(basis),'source':'acyclic_orientation'})); bc+=1
     return ExpressionBundle('pure_cff',tuple(),tuple(),signatures,sb.build(),tuple(terms))
+
+def _scaled_pref(prefactor: Any, scale: Fraction) -> str:
+    return _frac_to_str(Fraction(str(prefactor)) * scale)
+
+def _append_bundle_terms(
+    out_terms: List[OrientationTerm],
+    sb: SurfaceCacheBuilder,
+    source_bundle: ExpressionBundle,
+    scale: Fraction,
+    label_prefix: str,
+    meta_source: str,
+    branch_start: int,
+) -> int:
+    surface_map = {
+        int(surface.surface_id): sb.intern(surface.kind, surface.expr, surface.label)
+        for surface in source_bundle.surface_cache
+    }
+    branch = int(branch_start)
+    for term in source_bundle.terms:
+        pref = _scaled_pref(term.prefactor_sign, scale)
+        if pref == '0':
+            continue
+        meta = dict(term.meta)
+        meta['source'] = meta_source
+        meta['original_source'] = term.meta.get('source')
+        meta['finite_pole_completion_scale'] = _frac_to_str(scale)
+        out_terms.append(OrientationTerm(
+            f'{label_prefix}:{term.orientation_id}',
+            'bounded_cff',
+            branch,
+            term.edge_orientations,
+            pref,
+            term.prefactor_half_edges,
+            tuple(surface_map[int(sid)] for sid in term.surface_chain),
+            term.loop_energy_exprs,
+            term.edge_energy_exprs,
+            meta,
+        ))
+        branch += 1
+    return branch
+
+def build_bounded_degree_cff_bundle(parsed, energy_degree_bounds):
+    signatures = tuple(e.signature for e in parsed.internal_edges)
+    bounds = normalize_energy_degree_bounds(energy_degree_bounds, len(signatures))
+    report = assert_energy_uv_convergent(signatures, bounds)
+    if bounds is None or max(bounds, default=0) <= 1:
+        bundle = build_pure_cff_bundle(parsed)
+        if report is None:
+            return bundle
+        terms = []
+        for idx, term in enumerate(bundle.terms):
+            meta = dict(term.meta)
+            meta['energy_degree_bounds'] = list(bounds)
+            meta['energy_divergence'] = report
+            terms.append(OrientationTerm(
+                term.orientation_id,
+                term.family,
+                idx,
+                term.edge_orientations,
+                term.prefactor_sign,
+                term.prefactor_half_edges,
+                term.surface_chain,
+                term.loop_energy_exprs,
+                term.edge_energy_exprs,
+                meta,
+            ))
+        return ExpressionBundle(bundle.family, bundle.loop_names, bundle.ext_names, bundle.signatures, bundle.surface_cache, tuple(terms))
+
+    # Completion used once the numerator bound leaves the ordinary CFF-safe
+    # affine class.  It is serialized as CFF plus explicit finite-pole contact
+    # sectors: ordinary CFF + (LTD - ordinary CFF).  The UV report guarantees
+    # that no residue at infinity is being silently discarded.
+    cff = build_pure_cff_bundle(parsed)
+    ltd = build_pure_ltd_bundle(signatures, len(parsed.ext_names))
+    sb = SurfaceCacheBuilder()
+    terms: List[OrientationTerm] = []
+    branch = 0
+    branch = _append_bundle_terms(terms, sb, cff, Fraction(1), 'cff', 'bounded_degree_ordinary_cff_part', branch)
+    branch = _append_bundle_terms(terms, sb, ltd, Fraction(1), 'contact-ltd', 'bounded_degree_ltd_contact_part', branch)
+    branch = _append_bundle_terms(terms, sb, cff, Fraction(-1), 'contact-minus-cff', 'bounded_degree_subtract_ordinary_cff_part', branch)
+    enriched = []
+    for idx, term in enumerate(terms):
+        meta = dict(term.meta)
+        meta['energy_degree_bounds'] = list(bounds)
+        meta['energy_divergence'] = report
+        meta['finite_pole_completion'] = True
+        enriched.append(OrientationTerm(
+            term.orientation_id,
+            term.family,
+            idx,
+            term.edge_orientations,
+            term.prefactor_sign,
+            term.prefactor_half_edges,
+            term.surface_chain,
+            term.loop_energy_exprs,
+            term.edge_energy_exprs,
+            meta,
+        ))
+    return ExpressionBundle('bounded_cff', tuple(), tuple(), signatures, sb.build(), tuple(enriched))
 
 def build_pure_ltd_bundle(signatures,n_external_symbols=None):
     n_internal=len(signatures); n_loops=len(signatures[0][0]); n_external_symbols=n_external_symbols if n_external_symbols is not None else len(signatures[0][1]); sb=SurfaceCacheBuilder(); terms=[]; bc=0
