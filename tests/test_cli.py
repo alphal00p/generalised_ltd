@@ -187,6 +187,11 @@ def test_one_loop_15_external_runtime_script_is_executable():
     assert script.exists()
     assert os.access(script, os.X_OK)
 
+def test_one_loop_10_external_runtime_script_is_executable():
+    script = ROOT / 'examples' / 'scripts' / 'one_loop_10_external_runtime_compare.sh'
+    assert script.exists()
+    assert os.access(script, os.X_OK)
+
 def test_five_loop_no_repeats_graph_has_four_externals_and_no_repeats():
     d = dot('five_loop_no_repeats.dot')
     validation = validate_graph(d)
@@ -203,6 +208,16 @@ def test_one_loop_15_external_graph_shape():
     assert validation['n_loops_from_labels'] == 1
     assert validation['n_external_symbols'] == 15
     assert validation['n_external_edges'] == 15
+    assert validation['repeated_groups'] == []
+
+def test_one_loop_10_external_graph_shape():
+    d = dot('one_loop_10_external.dot')
+    validation = validate_graph(d)
+    assert validation['ok']
+    assert validation['n_internal_edges'] == 10
+    assert validation['n_loops_from_labels'] == 1
+    assert validation['n_external_symbols'] == 10
+    assert validation['n_external_edges'] == 10
     assert validation['repeated_groups'] == []
 
 def test_graph_from_signatures_cli_stdout_round_trips_prop_expression():

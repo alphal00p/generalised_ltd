@@ -62,6 +62,13 @@ bounded-degree builders and can take substantially longer to compile than the
 timed evaluation itself.
 
 The one-loop many-external benchmark compares LTD and CFF for a numerator-free
+one-loop 10-gon with 10 propagators and 10 external momentum symbols:
+
+```bash
+examples/scripts/one_loop_10_external_runtime_compare.sh
+```
+
+The analogous larger benchmark uses a numerator-free
 one-loop 15-gon with 15 propagators and 15 external momentum symbols:
 
 ```bash
