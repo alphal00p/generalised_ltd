@@ -61,6 +61,16 @@ edge terms squared.  The squared-edge scenario intentionally exercises the
 bounded-degree builders and can take substantially longer to compile than the
 timed evaluation itself.
 
+The one-loop many-external benchmark compares LTD and CFF for a numerator-free
+one-loop topology with 15 external momentum symbols:
+
+```bash
+examples/scripts/one_loop_15_external_runtime_compare.sh
+```
+
+This script builds real-valued Symbolica evaluators for the two representations
+and profiles every Symbolica evaluator mode stored in the JSON.
+
 Inspect one orientation in detail:
 
 ```bash
