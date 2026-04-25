@@ -48,8 +48,15 @@ run python3 hybrid3d.py build \
   --dot "$DOT" \
   --json-out "$OUT/box_pow3_hybrid_builtin.json"
 
+run python3 hybrid3d.py build \
+  --family cff \
+  --dot "$DOT" \
+  --json-out "$OUT/box_pow3_cff_builtin.json"
+
 run cp "$OUT/box_pow3_hybrid_builtin.json" "$OUT/box_pow3_hybrid_symbolica_real.json"
 run cp "$OUT/box_pow3_hybrid_builtin.json" "$OUT/box_pow3_hybrid_symbolica_complex.json"
+run cp "$OUT/box_pow3_cff_builtin.json" "$OUT/box_pow3_cff_symbolica_real.json"
+run cp "$OUT/box_pow3_cff_builtin.json" "$OUT/box_pow3_cff_symbolica_complex.json"
 
 section "Compile real-valued Symbolica evaluator and display Symbolica input"
 printf '\n$ python3 hybrid3d.py compile --orientation-json %q --dot %q --numerator-expr %q --value-type real --display-expression --output %q | tee %q\n' \
@@ -74,6 +81,21 @@ run python3 hybrid3d.py compile \
   --numerator-expr "$NUMERATOR" \
   --value-type complex \
   --output "$OUT/box_pow3_hybrid_complex.so"
+
+section "Compile CFF Symbolica evaluators"
+run python3 hybrid3d.py compile \
+  --orientation-json "$OUT/box_pow3_cff_symbolica_real.json" \
+  --dot "$DOT" \
+  --numerator-expr "$NUMERATOR" \
+  --value-type real \
+  --output "$OUT/box_pow3_cff_real.so"
+
+run python3 hybrid3d.py compile \
+  --orientation-json "$OUT/box_pow3_cff_symbolica_complex.json" \
+  --dot "$DOT" \
+  --numerator-expr "$NUMERATOR" \
+  --value-type complex \
+  --output "$OUT/box_pow3_cff_complex.so"
 
 section "Single-value evaluation: built-in vs Symbolica real vs Symbolica complex"
 run python3 hybrid3d.py evaluate \
@@ -128,9 +150,11 @@ run python3 hybrid3d.py evaluate \
   | tee "$OUT/profile_symbolica_complex.json"
 
 section "Profiling table: all Symbolica evaluator modes"
-printf '\n$ python3 hybrid3d.py evaluate --orientation-json %q --profile-label hybrid-real --profile-json hybrid-complex=%q --dot %q --masses %q --evaluator-backend symbolica --profiling %q --seed 1337 --no-color | tee %q\n' \
+printf '\n$ python3 hybrid3d.py evaluate --orientation-json %q --profile-label hybrid-real --profile-json hybrid-complex=%q --profile-json cff-real=%q --profile-json cff-complex=%q --dot %q --masses %q --evaluator-backend symbolica --profiling %q --seed 1337 --no-color | tee %q\n' \
   "$OUT/box_pow3_hybrid_symbolica_real.json" \
   "$OUT/box_pow3_hybrid_symbolica_complex.json" \
+  "$OUT/box_pow3_cff_symbolica_real.json" \
+  "$OUT/box_pow3_cff_symbolica_complex.json" \
   "$DOT" \
   "$MASSES" \
   "$BATCH" \
@@ -139,6 +163,8 @@ python3 hybrid3d.py evaluate \
   --orientation-json "$OUT/box_pow3_hybrid_symbolica_real.json" \
   --profile-label hybrid-real \
   --profile-json "hybrid-complex=$OUT/box_pow3_hybrid_symbolica_complex.json" \
+  --profile-json "cff-real=$OUT/box_pow3_cff_symbolica_real.json" \
+  --profile-json "cff-complex=$OUT/box_pow3_cff_symbolica_complex.json" \
   --dot "$DOT" \
   --masses "$MASSES" \
   --evaluator-backend symbolica \
