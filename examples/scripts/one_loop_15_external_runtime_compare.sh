@@ -10,7 +10,7 @@ BATCH="${HYBRID3D_PROFILE_BATCH:-100}"
 SEED="${HYBRID3D_PROFILE_SEED:-1337}"
 N_CORES="${HYBRID3D_SYMBOLICA_N_CORES:-4}"
 NO_NATIVE="${HYBRID3D_SYMBOLICA_NO_NATIVE:-0}"
-MASSES='{"m1":0.60,"m2":0.70,"m3":0.80,"m4":0.90,"m5":1.00,"m6":1.10,"m7":1.20,"m8":1.30}'
+MASSES='{"m1":0.60,"m2":0.65,"m3":0.70,"m4":0.75,"m5":0.80,"m6":0.85,"m7":0.90,"m8":0.95,"m9":1.00,"m10":1.05,"m11":1.10,"m12":1.15,"m13":1.20,"m14":1.25,"m15":1.30}'
 
 mkdir -p "$OUT"
 
@@ -60,7 +60,8 @@ printf 'Output directory: %s\n' "$OUT"
 printf 'Batch size: %s\n' "$BATCH"
 printf 'Symbolica n_cores: %s\n' "$N_CORES"
 printf 'Numerator: 1\n'
-printf 'Topology: 8 propagators, 15 external momentum symbols\n'
+printf 'Topology: 15 propagators, 15 external momentum symbols\n'
+printf 'Note: the CFF build has many one-loop sign sectors and can be substantially slower than LTD.\n'
 
 build_and_compile ltd
 build_and_compile cff

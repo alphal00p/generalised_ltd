@@ -199,6 +199,7 @@ def test_one_loop_15_external_graph_shape():
     d = dot('one_loop_15_external.dot')
     validation = validate_graph(d)
     assert validation['ok']
+    assert validation['n_internal_edges'] == 15
     assert validation['n_loops_from_labels'] == 1
     assert validation['n_external_symbols'] == 15
     assert validation['n_external_edges'] == 15
