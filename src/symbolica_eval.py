@@ -35,6 +35,7 @@ def _canonical_json(obj: Any) -> str:
 def structure_fingerprint(data: Mapping[str, Any]) -> str:
     clean = copy.deepcopy(dict(data))
     clean.pop("evaluator", None)
+    clean.pop("evaluators", None)
     return hashlib.sha256(_canonical_json(clean).encode()).hexdigest()
 
 
@@ -69,14 +70,14 @@ def graph_fingerprint(dot: Any) -> str:
 
 def _require_symbolica():
     try:
-        from symbolica import E, S, Expression, CompiledComplexEvaluator, CompiledRealEvaluator
+        from symbolica import E, S, Expression, Evaluator, CompiledComplexEvaluator, CompiledRealEvaluator
     except Exception as exc:  # pragma: no cover - exercised only when optional dependency is missing.
         raise RuntimeError("Symbolica is required for this command but could not be imported.") from exc
-    return E, S, Expression, CompiledComplexEvaluator, CompiledRealEvaluator
+    return E, S, Expression, Evaluator, CompiledComplexEvaluator, CompiledRealEvaluator
 
 
 def _num(value: Any):
-    _E, _S, Expression, _CC, _CR = _require_symbolica()
+    _E, _S, Expression, _Evaluator, _CC, _CR = _require_symbolica()
     frac = Fraction(str(value))
     out = Expression.num(frac.numerator)
     if frac.denominator != 1:
@@ -85,7 +86,7 @@ def _num(value: Any):
 
 
 def _tagged(name: str, *tags: int):
-    E, _S, _Expression, _CC, _CR = _require_symbolica()
+    E, _S, _Expression, _Evaluator, _CC, _CR = _require_symbolica()
     return E(f"{name}({','.join(str(int(t)) for t in tags)})")
 
 
@@ -236,7 +237,7 @@ def _input_layout(parsed: Any) -> List[Dict[str, Any]]:
 
 
 def _params_from_layout(layout: Sequence[Mapping[str, Any]]):
-    _E, S, _Expression, _CC, _CR = _require_symbolica()
+    _E, S, _Expression, _Evaluator, _CC, _CR = _require_symbolica()
     return [S(str(entry["name"])) for entry in layout]
 
 
@@ -288,7 +289,7 @@ def _map_key(loop_q0: Sequence[Mapping[str, Any]], edge_q0: Sequence[Mapping[str
 
 
 def build_symbolica_expression(data: Mapping[str, Any], dot: Any, numerator_expr: str):
-    E, S, _Expression, _CC, _CR = _require_symbolica()
+    E, S, _Expression, _Evaluator, _CC, _CR = _require_symbolica()
     parsed = parse_dot_graph(dot)
     layout = _input_layout(parsed)
     params = _params_from_layout(layout)
@@ -387,12 +388,46 @@ def default_output_path(json_path: pathlib.Path, data: Mapping[str, Any], dot: A
     return json_path.with_name(f"{json_path.stem}__symbolica_{digest}.so")
 
 
+def default_eager_output_path(json_path: pathlib.Path, data: Mapping[str, Any], dot: Any, numerator_expr: str, value_type: str) -> pathlib.Path:
+    return default_output_path(json_path, data, dot, numerator_expr, value_type).with_suffix(".sev")
+
+
+def _common_metadata(
+    data: Mapping[str, Any],
+    dot: Any,
+    built: Mapping[str, Any],
+    numerator_expr: str,
+    value_type: str,
+    n_cores: int,
+    iterations: int,
+    cpe_iterations: Optional[int],
+) -> Dict[str, Any]:
+    return {
+        "kind": "symbolica",
+        "version": 2,
+        "value_type": value_type,
+        "input_len": len(built["params"]),
+        "output_len": 1,
+        "numerator_expr": numerator_expr,
+        "input_layout": built["layout"],
+        "map_count": built["map_count"],
+        "graph_fingerprint": graph_fingerprint(dot),
+        "structure_fingerprint": structure_fingerprint(data),
+        "symbolica": {
+            "n_cores": n_cores,
+            "iterations": iterations,
+            "cpe_iterations": cpe_iterations,
+        },
+    }
+
+
 def compile_symbolica_evaluator(
     data: Mapping[str, Any],
     dot: Any,
     numerator_expr: str,
     json_path: pathlib.Path,
     output_path: Optional[pathlib.Path] = None,
+    eager_output_path: Optional[pathlib.Path] = None,
     value_type: str = "real",
     function_name: Optional[str] = None,
     inline_asm: str = "default",
@@ -405,14 +440,18 @@ def compile_symbolica_evaluator(
     compiler_flags: Optional[Sequence[str]] = None,
     keep_cpp: bool = False,
 ) -> Dict[str, Any]:
-    _E, _S, _Expression, _CompiledComplexEvaluator, _CompiledRealEvaluator = _require_symbolica()
+    _E, _S, _Expression, _Evaluator, _CompiledComplexEvaluator, _CompiledRealEvaluator = _require_symbolica()
     if value_type not in {"real", "complex"}:
         raise ValueError("value_type must be 'real' or 'complex'.")
     json_path = pathlib.Path(json_path)
     out_path = pathlib.Path(output_path) if output_path is not None else default_output_path(json_path, data, dot, numerator_expr, value_type)
     if out_path.suffix != ".so":
         out_path = out_path.with_suffix(".so")
+    eager_path = pathlib.Path(eager_output_path) if eager_output_path is not None else default_eager_output_path(json_path, data, dot, numerator_expr, value_type)
+    if eager_path.suffix == "":
+        eager_path = eager_path.with_suffix(".sev")
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    eager_path.parent.mkdir(parents=True, exist_ok=True)
     cpp_path = out_path.with_suffix(".cpp")
     function_name = function_name or f"hybrid3d_eval_{hashlib.sha256(str(out_path).encode()).hexdigest()[:10]}"
 
@@ -429,6 +468,7 @@ def compile_symbolica_evaluator(
     )
     if value_type == "complex":
         evaluator.set_real_params(list(range(len(built["params"]))), sqrt_real=True)
+    eager_path.write_bytes(evaluator.save())
     evaluator.compile(
         function_name,
         str(cpp_path),
@@ -445,28 +485,37 @@ def compile_symbolica_evaluator(
             cpp_path.unlink()
         except FileNotFoundError:
             pass
+    common = _common_metadata(data, dot, built, numerator_expr, value_type, n_cores, iterations, cpe_iterations)
     rel_library = os.path.relpath(out_path, json_path.parent)
-    return {
-        "kind": "symbolica",
-        "version": 1,
+    rel_eager = os.path.relpath(eager_path, json_path.parent)
+    compiled = {
+        **common,
+        "mode": "symbolica_compiled",
         "library": rel_library,
         "function_name": function_name,
-        "value_type": value_type,
-        "input_len": len(built["params"]),
-        "output_len": 1,
-        "numerator_expr": numerator_expr,
-        "input_layout": built["layout"],
-        "map_count": built["map_count"],
-        "graph_fingerprint": graph_fingerprint(dot),
-        "structure_fingerprint": structure_fingerprint(data),
         "symbolica": {
+            **common["symbolica"],
             "inline_asm": inline_asm,
             "optimization_level": optimization_level,
             "native": native,
-            "n_cores": n_cores,
-            "iterations": iterations,
-            "cpe_iterations": cpe_iterations,
         },
+    }
+    eager = {
+        **common,
+        "mode": "symbolica_eager",
+        "state": rel_eager,
+        "symjit": False,
+    }
+    eager_symjit = {
+        **common,
+        "mode": "symbolica_eager_symjit",
+        "state": rel_eager,
+        "symjit": True,
+    }
+    return {
+        "symbolica_compiled": compiled,
+        "symbolica_eager": eager,
+        "symbolica_eager_symjit": eager_symjit,
     }
 
 
@@ -494,14 +543,64 @@ def _metadata_library_path(json_path: pathlib.Path, metadata: Mapping[str, Any])
     return lib
 
 
+def _metadata_state_path(json_path: pathlib.Path, metadata: Mapping[str, Any]) -> pathlib.Path:
+    state = pathlib.Path(str(metadata["state"]))
+    if not state.is_absolute():
+        state = pathlib.Path(json_path).parent / state
+    return state
+
+
+def canonical_symbolica_backend(backend: str) -> str:
+    return "symbolica_compiled" if backend == "symbolica" else backend
+
+
+def available_symbolica_evaluator_modes(data: Mapping[str, Any]) -> List[str]:
+    modes: List[str] = []
+    evaluators = data.get("evaluators")
+    if isinstance(evaluators, Mapping):
+        for mode in ("symbolica_compiled", "symbolica_eager", "symbolica_eager_symjit"):
+            if mode in evaluators:
+                modes.append(mode)
+    elif "evaluator" in data:
+        modes.append("symbolica_compiled")
+    return modes
+
+
+def symbolica_evaluator_metadata(data: Mapping[str, Any], backend: str) -> Mapping[str, Any]:
+    mode = canonical_symbolica_backend(backend)
+    evaluators = data.get("evaluators")
+    if isinstance(evaluators, Mapping) and mode in evaluators:
+        metadata = evaluators[mode]
+    elif mode == "symbolica_compiled" and "evaluator" in data:
+        metadata = data["evaluator"]
+    else:
+        available = ", ".join(available_symbolica_evaluator_modes(data)) or "none"
+        if available == "none":
+            raise ValueError("JSON has no evaluator metadata. Run the compile subcommand first.")
+        raise ValueError(f"JSON has no {mode!r} evaluator metadata. Available modes: {available}.")
+    if metadata.get("kind") != "symbolica":
+        raise ValueError(f"JSON evaluator metadata for {mode!r} is not a Symbolica evaluator.")
+    return metadata
+
+
 def load_compiled_evaluator(json_path: pathlib.Path, metadata: Mapping[str, Any]):
-    _E, _S, _Expression, CompiledComplexEvaluator, CompiledRealEvaluator = _require_symbolica()
+    _E, _S, _Expression, _Evaluator, CompiledComplexEvaluator, CompiledRealEvaluator = _require_symbolica()
     lib = _metadata_library_path(json_path, metadata)
     if not lib.exists():
         raise FileNotFoundError(f"Symbolica evaluator library does not exist: {lib}")
     value_type = metadata["value_type"]
     cls = CompiledComplexEvaluator if value_type == "complex" else CompiledRealEvaluator
     return cls.load(str(lib), str(metadata["function_name"]), int(metadata["input_len"]), int(metadata["output_len"]))
+
+
+def load_eager_evaluator(json_path: pathlib.Path, metadata: Mapping[str, Any]):
+    _E, _S, _Expression, Evaluator, _CompiledComplexEvaluator, _CompiledRealEvaluator = _require_symbolica()
+    state = _metadata_state_path(json_path, metadata)
+    if not state.exists():
+        raise FileNotFoundError(f"Symbolica eager evaluator state does not exist: {state}")
+    evaluator = Evaluator.load(state.read_bytes())
+    evaluator.jit_compile(bool(metadata.get("symjit", False)))
+    return evaluator
 
 
 def evaluate_symbolica(
@@ -513,12 +612,9 @@ def evaluate_symbolica(
     mass_map: Optional[Mapping[str, Any]],
     batch_size: int = 1,
     profile: bool = False,
+    backend: str = "symbolica_compiled",
 ) -> Tuple[Any, Optional[Dict[str, Any]]]:
-    if "evaluator" not in data:
-        raise ValueError("JSON has no evaluator metadata. Run the compile subcommand first.")
-    metadata = data["evaluator"]
-    if metadata.get("kind") != "symbolica":
-        raise ValueError("JSON evaluator metadata is not a Symbolica evaluator.")
+    metadata = symbolica_evaluator_metadata(data, backend)
     if metadata.get("structure_fingerprint") != structure_fingerprint(data):
         raise ValueError("Symbolica evaluator is stale: structure fingerprint does not match this JSON.")
     if metadata.get("graph_fingerprint") != graph_fingerprint(dot):
@@ -526,15 +622,24 @@ def evaluate_symbolica(
 
     import numpy as np
 
-    evaluator = load_compiled_evaluator(pathlib.Path(json_path), metadata)
+    mode = canonical_symbolica_backend(backend)
+    if mode == "symbolica_compiled":
+        evaluator = load_compiled_evaluator(pathlib.Path(json_path), metadata)
+    elif mode in {"symbolica_eager", "symbolica_eager_symjit"}:
+        evaluator = load_eager_evaluator(pathlib.Path(json_path), metadata)
+    else:
+        raise ValueError(f"Unsupported Symbolica evaluator backend {backend!r}.")
     row = prepare_symbolica_inputs(metadata, dot, ext4, loop3, mass_map)
     batch_size = int(batch_size)
     if batch_size < 1:
         raise ValueError("batch_size must be positive.")
     dtype = np.complex128 if metadata["value_type"] == "complex" else np.float64
     inputs = np.asarray([row] * batch_size, dtype=dtype)
+    eval_fn = evaluator.evaluate_complex if metadata["value_type"] == "complex" and mode in {"symbolica_eager", "symbolica_eager_symjit"} else evaluator.evaluate
+    if profile:
+        eval_fn(inputs[:1])
     start = time.perf_counter()
-    result = evaluator.evaluate(inputs)
+    result = eval_fn(inputs)
     elapsed = time.perf_counter() - start
     value = result[0][0]
     if not profile:

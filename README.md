@@ -45,7 +45,7 @@ examples/scripts/box_pow3_cli_showcase.sh
 
 It prints pretty overviews for LTD, CFF, and hybrid structures, runs the
 three-way comparison, compiles real and complex Symbolica evaluators, and
-profiles built-in versus compiled evaluation.
+profiles built-in versus compiled Symbolica evaluation.
 
 The five-loop runtime comparison script builds and compiles LTD, CFF, and
 hybrid evaluators for a non-repeated four-external five-loop graph and for the
@@ -97,13 +97,13 @@ python3 hybrid3d.py compile \
 python3 hybrid3d.py evaluate \
   --orientation-json demo/box_hybrid.json \
   --dot examples/graphs/box_pow3.dot \
-  --use-symbolica \
+  --evaluator-backend symbolica_compiled \
   --masses '{"m1":0.8,"m2":1.1,"m3":0.9,"m4":1.2}'
 
 python3 hybrid3d.py evaluate \
   --orientation-json demo/box_hybrid.json \
   --dot examples/graphs/box_pow3.dot \
-  --use-symbolica \
+  --evaluator-backend symbolica_eager_symjit \
   --profiling 10000 \
   --masses '{"m1":0.8,"m2":1.1,"m3":0.9,"m4":1.2}'
 ```
@@ -117,17 +117,21 @@ python3 hybrid3d.py evaluate \
   --profile-json cff=demo/box_cff.json \
   --profile-json hybrid=demo/box_hybrid.json \
   --dot examples/graphs/box_pow3.dot \
-  --use-symbolica \
+  --evaluator-backend symbolica \
   --profiling 10000 \
   --masses '{"m1":0.8,"m2":1.1,"m3":0.9,"m4":1.2}'
 ```
 
-The `compile` command stores an `evaluator` block in the JSON and writes a
-shared-library evaluator (`.so`) next to it by default.  The library path is
-stored relative to the JSON file.  The compiled evaluator is tied to the exact
-DOT graph, JSON structure, value type, and numerator expression.  If
-`SYMBOLICA_LICENSE` is set in the environment, Symbolica can use multicore
-optimization during compilation.
+The `compile` command stores an `evaluator` compatibility block plus an
+`evaluators` block in the JSON.  It writes both a shared-library evaluator
+(`.so`) and a serialized eager Symbolica evaluator (`.sev`) next to the JSON by
+default.  `evaluate --evaluator-backend` can select `symbolica_compiled`,
+`symbolica_eager`, or `symbolica_eager_symjit`; `symbolica` is an alias for
+compiled evaluation in a single run and means all available Symbolica modes in
+the multi-JSON profiling table.  The evaluator paths are stored relative to the
+JSON file and are tied to the exact DOT graph, JSON structure, value type, and
+numerator expression.  If `SYMBOLICA_LICENSE` is set in the environment,
+Symbolica can use multicore optimization during evaluator construction.
 `--display-expression` prints the Symbolica top-level expression, parameter
 order, constants, and function map before compilation.
 

@@ -307,6 +307,10 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
     assert 'Compiled evaluator metadata' in compiled.stdout
     compiled_json = json.loads(json_path.read_text())
     assert compiled_json['evaluator']['library'] == so_path.name
+    assert set(compiled_json['evaluators']) == {'symbolica_compiled', 'symbolica_eager', 'symbolica_eager_symjit'}
+    eager_state = tmp_path / compiled_json['evaluators']['symbolica_eager']['state']
+    assert eager_state.exists()
+    assert compiled_json['evaluators']['symbolica_eager_symjit']['state'] == compiled_json['evaluators']['symbolica_eager']['state']
     assert so_path.exists()
 
     internal = subprocess.run(
@@ -349,6 +353,49 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
         capture_output=True,
     )
     assert abs(float(internal.stdout.strip()) - float(symbolica.stdout.strip())) < 1e-10
+
+    eager = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'evaluate',
+            '--orientation-json',
+            str(json_path),
+            '--dot',
+            str(ROOT / 'examples' / 'graphs' / 'box.dot'),
+            '--evaluator-backend',
+            'symbolica_eager',
+            '--masses',
+            masses,
+            '--seed',
+            '1337',
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    eager_symjit = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'evaluate',
+            '--orientation-json',
+            str(json_path),
+            '--dot',
+            str(ROOT / 'examples' / 'graphs' / 'box.dot'),
+            '--evaluator-backend',
+            'symbolica_eager_symjit',
+            '--masses',
+            masses,
+            '--seed',
+            '1337',
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    assert abs(float(internal.stdout.strip()) - float(eager.stdout.strip())) < 1e-10
+    assert abs(float(internal.stdout.strip()) - float(eager_symjit.stdout.strip())) < 1e-10
 
     profiled = subprocess.run(
         [
@@ -404,6 +451,9 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
     )
     assert 'cff-a' in profile_table.stdout
     assert 'cff-b' in profile_table.stdout
+    assert 'symbolica_compiled' in profile_table.stdout
+    assert 'symbolica_eager' in profile_table.stdout
+    assert 'symbolica_eager_symjit' in profile_table.stdout
     assert 'relative' in profile_table.stdout
     assert '100.0%' in profile_table.stdout
 
