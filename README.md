@@ -13,15 +13,15 @@ rejected; use explicit repeated edges instead.
 Validate a graph:
 
 ```bash
-python3 hybrid3d.py validate --dot examples/box_pow3.dot
+python3 hybrid3d.py validate --dot examples/graphs/box_pow3.dot
 ```
 
 Build a structure:
 
 ```bash
-python3 hybrid3d.py build --family ltd --dot examples/box.dot --pretty
-python3 hybrid3d.py build --family cff --dot examples/box.dot --pretty
-python3 hybrid3d.py build --family hybrid --dot examples/box_pow3.dot --pretty
+python3 hybrid3d.py build --family ltd --dot examples/graphs/box.dot --pretty
+python3 hybrid3d.py build --family cff --dot examples/graphs/box.dot --pretty
+python3 hybrid3d.py build --family hybrid --dot examples/graphs/box_pow3.dot --pretty
 ```
 
 Build a DOT graph from a propagator-signature expression:
@@ -36,10 +36,21 @@ The default output uses the same DOT conventions as the examples.  Use
 `--format vakint` for the compact single-`ext` node format with ordered edge ids
 and `lmb_id` attributes.
 
+Runnable CLI examples live in `examples/scripts`.  The main showcase for the
+repeated box topology is:
+
+```bash
+examples/scripts/box_pow3_cli_showcase.sh
+```
+
+It prints pretty overviews for LTD, CFF, and hybrid structures, runs the
+three-way comparison, compiles real and complex Symbolica evaluators, and
+profiles built-in versus compiled evaluation.
+
 Inspect one orientation in detail:
 
 ```bash
-python3 hybrid3d.py build --family cff --dot examples/box.dot \
+python3 hybrid3d.py build --family cff --dot examples/graphs/box.dot \
   --energy-degree-bounds 0:2,1:2,2:2 \
   --pretty --show-details-for-orientation --++ --no-color
 ```
@@ -47,12 +58,12 @@ python3 hybrid3d.py build --family cff --dot examples/box.dot \
 Export and evaluate JSON:
 
 ```bash
-python3 hybrid3d.py build --family hybrid --dot examples/box_pow3.dot \
+python3 hybrid3d.py build --family hybrid --dot examples/graphs/box_pow3.dot \
   --json-out demo/box_hybrid.json
 
 python3 hybrid3d.py evaluate \
   --orientation-json demo/box_hybrid.json \
-  --dot examples/box_pow3.dot \
+  --dot examples/graphs/box_pow3.dot \
   --external '[[0.3,0.1,-0.2,0.05],[-0.15,0.2,0.05,-0.1],[0.25,-0.1,0.15,0.07]]' \
   --loop3 '[[0.2,-0.3,0.1]]' \
   --masses '{"m1":0.8,"m2":1.1,"m3":0.9,"m4":1.2}' \
@@ -64,19 +75,20 @@ Compile a fixed-numerator Symbolica evaluator and use it:
 ```bash
 python3 hybrid3d.py compile \
   --orientation-json demo/box_hybrid.json \
-  --dot examples/box_pow3.dot \
+  --dot examples/graphs/box_pow3.dot \
   --numerator-expr 'dot(edges[0], ext[0]) + dot(edges[3], ext[0])' \
-  --value-type real
+  --value-type real \
+  --display-expression
 
 python3 hybrid3d.py evaluate \
   --orientation-json demo/box_hybrid.json \
-  --dot examples/box_pow3.dot \
+  --dot examples/graphs/box_pow3.dot \
   --use-symbolica \
   --masses '{"m1":0.8,"m2":1.1,"m3":0.9,"m4":1.2}'
 
 python3 hybrid3d.py evaluate \
   --orientation-json demo/box_hybrid.json \
-  --dot examples/box_pow3.dot \
+  --dot examples/graphs/box_pow3.dot \
   --use-symbolica \
   --profiling 10000 \
   --masses '{"m1":0.8,"m2":1.1,"m3":0.9,"m4":1.2}'
@@ -88,15 +100,17 @@ stored relative to the JSON file.  The compiled evaluator is tied to the exact
 DOT graph, JSON structure, value type, and numerator expression.  If
 `SYMBOLICA_LICENSE` is set in the environment, Symbolica can use multicore
 optimization during compilation.
+`--display-expression` prints the Symbolica top-level expression, parameter
+order, constants, and function map before compilation.
 
 Run diagnostics:
 
 ```bash
-python3 hybrid3d.py test --dot examples/proper_iterated_sandwiched_bubble.dot \
+python3 hybrid3d.py test --dot examples/graphs/proper_iterated_sandwiched_bubble.dot \
   --masses '{"mA":0.8,"mB":0.9,"mC":1.1,"mD":0.75,"mE":1.0,"mF":0.6}' \
   --numerator-expr 'dot(edges[1], ext[0]) + dot(edges[4], ext[0])'
 
-python3 hybrid3d.py test-cff-ltd --dot examples/box.dot \
+python3 hybrid3d.py test-cff-ltd --dot examples/graphs/box.dot \
   --energy-degree-bounds 0:2,1:2,2:2 \
   --numerator-expr 'edges[0][0]**2 * edges[1][0]**2 * edges[2][0]**2' \
   --dps 80
@@ -145,7 +159,7 @@ as `(e)` or `(h)`.
 each edge in the numerator:
 
 ```bash
-python3 hybrid3d.py build --family cff --dot examples/box.dot \
+python3 hybrid3d.py build --family cff --dot examples/graphs/box.dot \
   --energy-degree-bounds 0:2,1:2,2:2 --pretty --no-color
 ```
 

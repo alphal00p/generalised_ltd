@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-import argparse, json, pathlib, sys
+import argparse, json, pathlib, sys, time
+import mpmath as mp
 ROOT = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 from src import load_dot_graph, validate_graph, build_structure, evaluate_structure, compare_three_modes, pretty_structure, run_test, run_cff_ltd_test
 from src.api import _random_default_inputs
+from src import structure as ST
 from src import graph_signatures as SIG2G
 from src import symbolica_eval as SYMEVAL
 
@@ -152,6 +154,7 @@ def cmd_evaluate(args):
             loop3,
             masses,
             batch_size=args.profiling or 1,
+            profile=args.profiling is not None,
         )
         if profile:
             print(json.dumps({
@@ -164,6 +167,26 @@ def cmd_evaluate(args):
             }, indent=2))
         else:
             print(val)
+        return
+    if args.profiling:
+        batch_size = int(args.profiling)
+        if batch_size < 1:
+            raise SystemExit('--profiling must be positive')
+        mp.mp.dps = args.dps
+        num_fn = ST.numerator_from_expr(args.numerator_expr or '1')
+        start = time.perf_counter()
+        val = None
+        for _ in range(batch_size):
+            val = ST.evaluate_minimal_bundle(data, dot, ext4, loop3, num_fn, mass_map=masses)
+        elapsed = time.perf_counter() - start
+        print(json.dumps({
+            'value': str(val),
+            'batch_size': batch_size,
+            'total_time': SYMEVAL.format_duration(elapsed),
+            'per_sample': SYMEVAL.format_duration(elapsed / batch_size),
+            'total_seconds': elapsed,
+            'seconds_per_sample': elapsed / batch_size,
+        }, indent=2))
         return
     val = evaluate_structure(data, dot, ext4, loop3, args.numerator_expr or '1', args.dps, masses)
     print(val)
@@ -179,6 +202,20 @@ def cmd_compile(args):
     compiler_flags = None
     if args.compiler_flags:
         compiler_flags = [x for item in args.compiler_flags for x in item.split() if x]
+    if args.display_expression:
+        print(SYMEVAL.format_symbolica_evaluator_inputs(
+            data,
+            dot,
+            numerator_expr=args.numerator_expr,
+            value_type=args.value_type,
+            n_cores=args.n_cores,
+            iterations=args.iterations,
+            cpe_iterations=args.cpe_iterations,
+            max_line_length=args.display_line_length,
+        ))
+        print()
+        print('Compiled evaluator metadata')
+        print('---------------------------')
     metadata = SYMEVAL.compile_symbolica_evaluator(
         data,
         dot,
@@ -303,7 +340,7 @@ def main():
     e.add_argument('--masses-file')
     e.add_argument('--seed', type=int, default=1337)
     e.add_argument('--use-symbolica', action='store_true')
-    e.add_argument('--profiling', type=int, help='Evaluate this many identical samples with the compiled Symbolica evaluator')
+    e.add_argument('--profiling', type=int, help='Evaluate this many identical samples and report timing')
     e.set_defaults(func=cmd_evaluate)
 
     comp = sub.add_parser('compile')
@@ -323,6 +360,8 @@ def main():
     comp.add_argument('--compiler-path')
     comp.add_argument('--compiler-flags', action='append')
     comp.add_argument('--keep-cpp', action='store_true')
+    comp.add_argument('--display-expression', action='store_true', help='Print the Symbolica evaluator expression, parameters, constants, and function map before compiling')
+    comp.add_argument('--display-line-length', type=int, default=100, help='Preferred line length for --display-expression output')
     comp.set_defaults(func=cmd_compile)
 
     c = sub.add_parser('compare')

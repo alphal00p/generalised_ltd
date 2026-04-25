@@ -95,7 +95,7 @@ ULTIMATE_CANONICAL_LOOP3 = (
 )
 
 def dot(name):
-    return load_dot_graph(str(ROOT/'examples'/name))
+    return load_dot_graph(str(ROOT/'examples'/'graphs'/name))
 
 def _graph_from_dot_text(text):
     graphs = pydot.graph_from_dot_data(text)
@@ -164,13 +164,18 @@ def assert_unique_edge_numerator_maps(data):
             assert variant['edge_q0'] == orient['edge_q0']
 
 def test_validate_all_examples_except_noisy():
-    for path in (ROOT/'examples').glob('*.dot'):
+    for path in (ROOT/'examples'/'graphs').glob('*.dot'):
         if path.name == 'noisy_example.dot':
             continue
         assert validate_graph(dot(path.name))['ok'], path.name
 
 def test_noisy_rejected():
     assert validate_graph(dot('noisy_example.dot'))['ok'] is False
+
+def test_box_pow3_showcase_script_is_executable():
+    script = ROOT / 'examples' / 'scripts' / 'box_pow3_cli_showcase.sh'
+    assert script.exists()
+    assert os.access(script, os.X_OK)
 
 def test_graph_from_signatures_cli_stdout_round_trips_prop_expression():
     expr = 'prop(k1+p1,mA)*prop(k1+p1-q1,mB)*prop(k1-p2+q2,mC)*prop(k1,mD)'
@@ -247,7 +252,7 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
             '--family',
             'cff',
             '--dot',
-            str(ROOT / 'examples' / 'box.dot'),
+            str(ROOT / 'examples' / 'graphs' / 'box.dot'),
             '--json-out',
             str(json_path),
         ],
@@ -255,7 +260,7 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
         text=True,
         capture_output=True,
     )
-    subprocess.run(
+    compiled = subprocess.run(
         [
             sys.executable,
             str(ROOT / 'hybrid3d.py'),
@@ -263,7 +268,7 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
             '--orientation-json',
             str(json_path),
             '--dot',
-            str(ROOT / 'examples' / 'box.dot'),
+            str(ROOT / 'examples' / 'graphs' / 'box.dot'),
             '--numerator-expr',
             numerator,
             '--output',
@@ -275,11 +280,18 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
             '--n-cores',
             '1',
             '--no-native',
+            '--display-expression',
+            '--display-line-length',
+            '80',
         ],
         check=True,
         text=True,
         capture_output=True,
     )
+    assert 'Symbolica evaluator input' in compiled.stdout
+    assert 'Function map' in compiled.stdout
+    assert 'Top-level expression' in compiled.stdout
+    assert 'Compiled evaluator metadata' in compiled.stdout
     compiled_json = json.loads(json_path.read_text())
     assert compiled_json['evaluator']['library'] == so_path.name
     assert so_path.exists()
@@ -292,7 +304,7 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
             '--orientation-json',
             str(json_path),
             '--dot',
-            str(ROOT / 'examples' / 'box.dot'),
+            str(ROOT / 'examples' / 'graphs' / 'box.dot'),
             '--numerator-expr',
             numerator,
             '--masses',
@@ -312,7 +324,7 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
             '--orientation-json',
             str(json_path),
             '--dot',
-            str(ROOT / 'examples' / 'box.dot'),
+            str(ROOT / 'examples' / 'graphs' / 'box.dot'),
             '--use-symbolica',
             '--masses',
             masses,
@@ -333,7 +345,7 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
             '--orientation-json',
             str(json_path),
             '--dot',
-            str(ROOT / 'examples' / 'box.dot'),
+            str(ROOT / 'examples' / 'graphs' / 'box.dot'),
             '--use-symbolica',
             '--profiling',
             '8',
@@ -351,6 +363,33 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
     assert profile['seconds_per_sample'] > 0
     assert profile['per_sample'].endswith(('us', 'ms', 's'))
 
+    builtin_profiled = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'evaluate',
+            '--orientation-json',
+            str(json_path),
+            '--dot',
+            str(ROOT / 'examples' / 'graphs' / 'box.dot'),
+            '--numerator-expr',
+            numerator,
+            '--profiling',
+            '4',
+            '--masses',
+            masses,
+            '--seed',
+            '1337',
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    builtin_profile = json.loads(builtin_profiled.stdout)
+    assert builtin_profile['batch_size'] == 4
+    assert builtin_profile['seconds_per_sample'] > 0
+    assert abs(float(internal.stdout.strip()) - float(builtin_profile['value'])) < 1e-10
+
     complex_json = tmp_path / 'box_cff_complex.json'
     complex_so = tmp_path / 'box_cff_complex_eval.so'
     subprocess.run(
@@ -361,7 +400,7 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
             '--orientation-json',
             str(json_path),
             '--dot',
-            str(ROOT / 'examples' / 'box.dot'),
+            str(ROOT / 'examples' / 'graphs' / 'box.dot'),
             '--numerator-expr',
             numerator,
             '--output',
@@ -390,7 +429,7 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
             '--orientation-json',
             str(complex_json),
             '--dot',
-            str(ROOT / 'examples' / 'box.dot'),
+            str(ROOT / 'examples' / 'graphs' / 'box.dot'),
             '--use-symbolica',
             '--masses',
             masses,
@@ -419,7 +458,7 @@ def test_symbolica_hybrid_compile_matches_builtin_double(tmp_path):
             '--family',
             'hybrid',
             '--dot',
-            str(ROOT / 'examples' / 'box_pow3.dot'),
+            str(ROOT / 'examples' / 'graphs' / 'box_pow3.dot'),
             '--json-out',
             str(json_path),
         ],
@@ -435,7 +474,7 @@ def test_symbolica_hybrid_compile_matches_builtin_double(tmp_path):
             '--orientation-json',
             str(json_path),
             '--dot',
-            str(ROOT / 'examples' / 'box_pow3.dot'),
+            str(ROOT / 'examples' / 'graphs' / 'box_pow3.dot'),
             '--numerator-expr',
             numerator,
             '--output',
@@ -460,7 +499,7 @@ def test_symbolica_hybrid_compile_matches_builtin_double(tmp_path):
             '--orientation-json',
             str(json_path),
             '--dot',
-            str(ROOT / 'examples' / 'box_pow3.dot'),
+            str(ROOT / 'examples' / 'graphs' / 'box_pow3.dot'),
             '--numerator-expr',
             numerator,
             '--masses',
@@ -480,7 +519,7 @@ def test_symbolica_hybrid_compile_matches_builtin_double(tmp_path):
             '--orientation-json',
             str(json_path),
             '--dot',
-            str(ROOT / 'examples' / 'box_pow3.dot'),
+            str(ROOT / 'examples' / 'graphs' / 'box_pow3.dot'),
             '--use-symbolica',
             '--masses',
             masses,
@@ -504,7 +543,7 @@ def test_symbolica_evaluate_errors_without_compiled_metadata(tmp_path):
             '--family',
             'cff',
             '--dot',
-            str(ROOT / 'examples' / 'box.dot'),
+            str(ROOT / 'examples' / 'graphs' / 'box.dot'),
             '--json-out',
             str(json_path),
         ],
@@ -520,7 +559,7 @@ def test_symbolica_evaluate_errors_without_compiled_metadata(tmp_path):
             '--orientation-json',
             str(json_path),
             '--dot',
-            str(ROOT / 'examples' / 'box.dot'),
+            str(ROOT / 'examples' / 'graphs' / 'box.dot'),
             '--use-symbolica',
             '--masses',
             json.dumps(BOX_MASSES),
@@ -676,7 +715,7 @@ def test_bounded_degree_hybrid_repeated_supports_quadratic_combinations():
     assert fine_diff < mp.mpf('1e-7')
 
 def test_hybrid_surfaces_have_unit_energy_coefficients():
-    for path in (ROOT/'examples').glob('*.dot'):
+    for path in (ROOT/'examples'/'graphs').glob('*.dot'):
         if path.name == 'noisy_example.dot':
             continue
         data = build_structure(dot(path.name), 'hybrid')

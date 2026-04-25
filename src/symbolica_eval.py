@@ -512,6 +512,7 @@ def evaluate_symbolica(
     loop3: Sequence[Sequence[Any]],
     mass_map: Optional[Mapping[str, Any]],
     batch_size: int = 1,
+    profile: bool = False,
 ) -> Tuple[Any, Optional[Dict[str, Any]]]:
     if "evaluator" not in data:
         raise ValueError("JSON has no evaluator metadata. Run the compile subcommand first.")
@@ -536,7 +537,7 @@ def evaluate_symbolica(
     result = evaluator.evaluate(inputs)
     elapsed = time.perf_counter() - start
     value = result[0][0]
-    if batch_size == 1:
+    if not profile:
         return value, None
     return value, {
         "batch_size": batch_size,
@@ -551,3 +552,75 @@ def format_duration(seconds: float) -> str:
     if seconds < 1:
         return f"{seconds * 1e3:.3g} ms"
     return f"{seconds:.3g} s"
+
+
+def _pretty_expr(expr: Any, max_line_length: int = 100) -> str:
+    if hasattr(expr, "format"):
+        return expr.format(
+            max_line_length=max_line_length,
+            indentation=2,
+            terms_on_new_line=True,
+            color_top_level_sum=False,
+            color_builtin_symbols=False,
+            bracket_level_colors=None,
+            max_terms=None,
+        )
+    return str(expr)
+
+
+def format_symbolica_evaluator_inputs(
+    data: Mapping[str, Any],
+    dot: Any,
+    numerator_expr: str,
+    value_type: str = "real",
+    n_cores: int = 4,
+    iterations: int = 1,
+    cpe_iterations: Optional[int] = None,
+    max_line_length: int = 100,
+) -> str:
+    built = build_symbolica_expression(data, dot, numerator_expr)
+    lines: List[str] = []
+    lines.append("Symbolica evaluator input")
+    lines.append("========================")
+    lines.append("")
+    lines.append(f"value_type = {value_type}")
+    lines.append(f"numerator_expr = {numerator_expr}")
+    lines.append(f"input_len = {len(built['params'])}")
+    lines.append("output_len = 1")
+    lines.append(f"n_cores = {n_cores}")
+    lines.append(f"iterations = {iterations}")
+    lines.append(f"cpe_iterations = {cpe_iterations}")
+    lines.append("")
+    lines.append("Evaluator call")
+    lines.append("--------------")
+    lines.append(
+        "expression.evaluator(constants, functions, params, "
+        f"iterations={iterations}, cpe_iterations={cpe_iterations}, "
+        f"n_cores={n_cores}, jit_compile=False, direct_translation=True)"
+    )
+    lines.append("")
+    lines.append("Parameters")
+    lines.append("----------")
+    for idx, (param, entry) in enumerate(zip(built["params"], built["layout"])):
+        lines.append(f"[{idx:03d}] {_pretty_expr(param, max_line_length)}  # {json.dumps(entry, sort_keys=True)}")
+    lines.append("")
+    lines.append("Constants")
+    lines.append("---------")
+    lines.append("(none)")
+    lines.append("")
+    lines.append("Function map")
+    lines.append("------------")
+    for idx, ((name, printable, args), body) in enumerate(built["functions"].items()):
+        arg_text = ", ".join(_pretty_expr(arg, max_line_length) for arg in args)
+        header = f"[{idx:03d}] {_pretty_expr(name, max_line_length)}"
+        header += f"  printable={printable!r}"
+        header += f"  args=({arg_text})"
+        lines.append(header)
+        rendered = _pretty_expr(body, max_line_length)
+        for body_line in rendered.splitlines():
+            lines.append(f"      {body_line}")
+    lines.append("")
+    lines.append("Top-level expression")
+    lines.append("--------------------")
+    lines.append(_pretty_expr(built["expression"], max_line_length))
+    return "\n".join(lines)
