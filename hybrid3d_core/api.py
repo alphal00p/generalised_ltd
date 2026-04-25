@@ -14,6 +14,7 @@ from .orientation_bundle import (
     build_hybrid_bundle_raw,
     energy_divergence_report,
     normalize_energy_degree_bounds,
+    assert_energy_uv_convergent,
 )
 
 
@@ -31,6 +32,8 @@ def validate_graph(dot) -> dict:
 
 def _build_bundle(parsed, family: str, energy_degree_bounds=None):
     if family == 'ltd':
+        if energy_degree_bounds is not None:
+            assert_energy_uv_convergent(tuple(e.signature for e in parsed.internal_edges), energy_degree_bounds)
         return build_pure_ltd_bundle(tuple(e.signature for e in parsed.internal_edges), len(parsed.ext_names)), 'bundle'
     if family == 'cff':
         if energy_degree_bounds is not None:
@@ -38,13 +41,10 @@ def _build_bundle(parsed, family: str, energy_degree_bounds=None):
         return build_pure_cff_bundle(parsed), 'bundle'
     if energy_degree_bounds is not None:
         bounds = normalize_energy_degree_bounds(energy_degree_bounds, len(parsed.internal_edges))
+        assert_energy_uv_convergent(tuple(e.signature for e in parsed.internal_edges), bounds)
         if not GIO.repeated_groups(parsed):
             return build_pure_ltd_bundle(tuple(e.signature for e in parsed.internal_edges), len(parsed.ext_names)), 'bounded_degree_ltd_collapse'
-        if max(bounds) > 1:
-            raise NotImplementedError(
-                'Bounded-degree hybrid for repeated propagators is not emitted yet without '
-                'the derivative/contact fallback.  Caps <= 1 keep the existing hybrid formula.'
-            )
+        return build_hybrid_bundle_raw(parsed, energy_degree_bounds=bounds), 'bounded_degree_hybrid_bundle'
     return build_hybrid_bundle_raw(parsed), 'bundle'
 
 

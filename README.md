@@ -102,16 +102,17 @@ python3 hybrid3d.py build --family cff --dot examples/box.dot \
   --energy-degree-bounds 0:2,1:2,2:2 --pretty --no-color
 ```
 
-The builder first checks the per-loop energy UV degree.  If a residue at
-infinity may contribute, the build fails.
+The builder checks both coordinate loop-energy UV degree and every
+one-parameter direction in loop-energy space.  If a residue at infinity may
+contribute, the build fails.
 
 Current exact bounded-degree support:
 
 - `ltd`: no structural change; bounds are reported only.
 - `hybrid` without repeated propagators: collapses to LTD even with bounds.
-- `hybrid` with repeated propagators: caps `<=1` use the existing hybrid formula;
-  higher caps intentionally raise until the repeated-channel contact lift is
-  implemented.
+- `hybrid` with repeated propagators: bounded numerators are handled by the
+  confluent hybrid formula with finite-difference numerator samples in the
+  residue-basis energy coordinates.
 - `cff`: one-loop non-repeated graphs support arbitrary quadratic-or-lower caps
   with only regular `E`-surfaces in denominators.
 - `cff`: isolated single-edge cubic caps are supported.
@@ -121,11 +122,11 @@ Unsupported bounded CFF cases raise `NotImplementedError`; the old
 
 The main open distinction is quadratic versus genuinely higher power.  Quadratic
 contacts produce only the three black-box samples `+E`, `0`, `-E` and no known
-polynomial numerator residue, so arbitrary quadratic combinations should be the
-next tractable extension once the multiloop CFF contact minor is fixed.  Cubic,
-quartic, and mixed higher caps produce known numerator-side polynomial factors
-after a pinch; those factors must be recursively reduced before the result can
-again be serialized as an E-surface CFF denominator tree.
+polynomial numerator residue, so arbitrary quadratic combinations are the next
+tractable pure-CFF extension once the multiloop CFF contact minor is fixed.
+Cubic, quartic, and mixed higher caps produce known numerator-side polynomial
+factors after a pinch; those factors must be recursively reduced before the
+result can again be serialized as an E-surface CFF denominator tree.
 
 ## Tests
 

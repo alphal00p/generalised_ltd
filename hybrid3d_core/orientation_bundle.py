@@ -644,6 +644,126 @@ def _numerator_derivative_samples(
         ))
     return tuple(out)
 
+def _derivative_nodes(degree: int) -> Tuple[int, ...]:
+    degree = max(0, int(degree))
+    nodes = [0]
+    step = 1
+    while len(nodes) < degree + 1:
+        nodes.extend([step, -step])
+        step += 1
+    return tuple(nodes[:degree + 1])
+
+def _finite_difference_weights(nodes: Sequence[int], deriv_order: int, degree: int) -> Tuple[Fraction, ...]:
+    degree = int(degree)
+    deriv_order = int(deriv_order)
+    if deriv_order > degree:
+        return tuple(Fraction(0) for _ in nodes)
+    A = [[Fraction(a) ** p for a in nodes] for p in range(degree + 1)]
+    rhs = [Fraction(math.factorial(deriv_order) if p == deriv_order else 0) for p in range(degree + 1)]
+    return tuple(_solve_fraction_system(A, rhs))
+
+def _basis_variable_degree_bounds(
+    bounds: Sequence[int],
+    edge_derivs: Sequence[Sequence[Fraction]],
+    n_basis: int,
+) -> Tuple[int, ...]:
+    out = []
+    for bpos in range(n_basis):
+        degree = 0
+        for edge_id, row in enumerate(edge_derivs):
+            if row[bpos]:
+                degree += int(bounds[edge_id])
+        out.append(degree)
+    return tuple(out)
+
+def _bounded_numerator_derivative_samples(
+    beta: Sequence[int],
+    bounds: Sequence[int],
+    signatures: Sequence[Signature],
+    channels: Sequence[_LogicalChannel],
+    basis_logical: Sequence[int],
+    cut_signs: Sequence[int],
+    edge_derivs: Sequence[Sequence[Fraction]],
+    n_external: int,
+) -> Tuple[_NumeratorSample, ...]:
+    beta = tuple(int(x) for x in beta)
+    basis_orig = tuple(channels[int(i)].rep_edge for i in basis_logical)
+    if not any(beta):
+        targets = [LinearEnergyExpr.zero() for _ in signatures]
+        for edge_id, sigma in zip(basis_orig, cut_signs):
+            targets[int(edge_id)] = LinearEnergyExpr.E(int(edge_id), int(sigma))
+        loop_exprs = solve_loop_energy_from_target_edge_exprs(signatures, basis_orig, targets, n_external)
+        edge_exprs = edge_q0_from_loop_exprs(signatures, loop_exprs, n_external)
+        edge_orient = [0] * len(signatures)
+        for edge_id, sigma in zip(basis_orig, cut_signs):
+            edge_orient[int(edge_id)] = int(sigma)
+        return (_NumeratorSample(
+            coeff=Fraction(1),
+            extra_half_edges=tuple(),
+            loop_exprs=tuple(loop_exprs),
+            edge_exprs=tuple(edge_exprs),
+            edge_orientations=tuple(edge_orient),
+            label='n0:fd0',
+            meta={'numerator_sample_kind': 'bounded_degree_finite_difference', 'finite_difference_beta': list(beta)},
+        ),)
+
+    degree_by_basis = _basis_variable_degree_bounds(bounds, edge_derivs, len(basis_logical))
+    per_axis = []
+    for bpos, order in enumerate(beta):
+        if not order:
+            continue
+        degree = int(degree_by_basis[bpos])
+        if order > degree:
+            return tuple()
+        nodes = _derivative_nodes(degree)
+        weights = _finite_difference_weights(nodes, order, degree)
+        per_axis.append((bpos, tuple((int(node), weight) for node, weight in zip(nodes, weights) if weight)))
+
+    out: List[_NumeratorSample] = []
+    for choices in itertools.product(*(items for _, items in per_axis)):
+        coeff = Fraction(1)
+        offsets: Dict[int, int] = {}
+        for (bpos, _), (node, weight) in zip(per_axis, choices):
+            coeff *= Fraction(weight)
+            offsets[int(bpos)] = int(node)
+        if not coeff:
+            continue
+        targets = [LinearEnergyExpr.zero() for _ in signatures]
+        labels = []
+        for bpos, (edge_id, sigma) in enumerate(zip(basis_orig, cut_signs)):
+            sample_coeff = int(sigma) + int(offsets.get(bpos, 0))
+            targets[int(edge_id)] = LinearEnergyExpr.E(int(edge_id), sample_coeff)
+            if bpos in offsets:
+                labels.append(f'b{bpos}{sample_coeff:+d}')
+        loop_exprs = solve_loop_energy_from_target_edge_exprs(signatures, basis_orig, targets, n_external)
+        edge_exprs = edge_q0_from_loop_exprs(signatures, loop_exprs, n_external)
+        edge_orient = [0] * len(signatures)
+        for edge_id, expr in enumerate(edge_exprs):
+            if expr == LinearEnergyExpr.E(edge_id, 1):
+                edge_orient[edge_id] = 1
+            elif expr == LinearEnergyExpr.E(edge_id, -1):
+                edge_orient[edge_id] = -1
+        extra_half_edges: List[int] = []
+        for bpos, order in enumerate(beta):
+            rep_edge = int(channels[int(basis_logical[bpos])].rep_edge)
+            extra_half_edges.extend(rep_edge for _ in range(int(order)))
+        coeff *= Fraction(2) ** sum(beta)
+        out.append(_NumeratorSample(
+            coeff=coeff,
+            extra_half_edges=tuple(extra_half_edges),
+            loop_exprs=tuple(loop_exprs),
+            edge_exprs=tuple(edge_exprs),
+            edge_orientations=tuple(edge_orient),
+            label='nD' + ''.join(str(x) for x in beta) + ':fd' + ','.join(labels),
+            meta={
+                'numerator_sample_kind': 'bounded_degree_finite_difference',
+                'finite_difference_beta': list(beta),
+                'finite_difference_offsets': dict(offsets),
+                'finite_difference_degree_bounds_by_basis': list(degree_by_basis),
+            },
+        ))
+    return tuple(out)
+
 def _node_to_internal_id(name: str, parsed: ParsedGraph) -> Optional[int]: return parsed.node_name_to_internal.get(_strip_quotes(name).split(':',1)[0])
 def build_base_graph_from_parsed(parsed: ParsedGraph) -> CFFGenerationGraphPy:
     n_vertices=max(parsed.node_name_to_internal.values())+1 if parsed.node_name_to_internal else 0
@@ -740,6 +860,51 @@ def normalize_energy_degree_bounds(bounds: Any, n_internal: int) -> Optional[Tup
             raise ValueError(f'Energy-degree bound for edge {idx} is negative: {value}')
     return tuple(out)
 
+def _energy_direction_reports(signatures: Sequence[Signature], bounds_tuple: Tuple[int, ...]) -> Tuple[Dict[str, Any], ...]:
+    """Return UV degrees for all one-parameter loop-energy directions.
+
+    The coordinate-axis test is insufficient for multiloop numerators: an
+    infinity arc can live along any non-zero vector in loop-energy space.  The
+    active denominator set is constant on each flat of the hyperplane
+    arrangement q_e^0(v)=0, so it is enough to enumerate the closures generated
+    by subsets of edge loop-signature rows.
+    """
+    if not signatures:
+        return tuple()
+    rows = [tuple(int(x) for x in sig[0]) for sig in signatures]
+    n_loops = len(rows[0])
+    n_edges = len(rows)
+    seen_active = set()
+    out: List[Dict[str, Any]] = []
+    for mask in range(1 << n_edges):
+        zero_rows = [rows[e] for e in range(n_edges) if mask & (1 << e)]
+        zero_rank = _rank(zero_rows)
+        closure = tuple(
+            e for e, row in enumerate(rows)
+            if _rank(zero_rows + [row]) == zero_rank
+        )
+        closure_rank = _rank([rows[e] for e in closure])
+        if closure_rank >= n_loops:
+            continue
+        active = tuple(e for e in range(n_edges) if e not in closure)
+        if active in seen_active:
+            continue
+        seen_active.add(active)
+        numerator_degree = sum(bounds_tuple[e] for e in active)
+        denominator_degree = 2 * len(active)
+        divergence_degree = numerator_degree - denominator_degree
+        out.append({
+            'zero_edges': list(closure),
+            'active_edges': list(active),
+            'nullity': n_loops - closure_rank,
+            'numerator_degree_bound': numerator_degree,
+            'denominator_degree': denominator_degree,
+            'divergence_degree': divergence_degree,
+            'convergent': divergence_degree < -1,
+        })
+    out.sort(key=lambda item: (item['divergence_degree'], -len(item['active_edges']), item['active_edges']), reverse=True)
+    return tuple(out)
+
 def energy_divergence_report(signatures: Sequence[Signature], bounds: Any):
     bounds_tuple = normalize_energy_degree_bounds(bounds, len(signatures))
     if bounds_tuple is None:
@@ -759,21 +924,30 @@ def energy_divergence_report(signatures: Sequence[Signature], bounds: Any):
             'divergence_degree': divergence_degree,
             'convergent': divergence_degree < -1,
         })
+    directions = _energy_direction_reports(signatures, bounds_tuple)
     return {
         'edge_degree_bounds': list(bounds_tuple),
         'loops': loops,
-        'convergent': all(item['convergent'] for item in loops),
+        'directions': list(directions),
+        'coordinate_convergent': all(item['convergent'] for item in loops),
+        'directional_convergent': all(item['convergent'] for item in directions),
+        'convergent': all(item['convergent'] for item in loops) and all(item['convergent'] for item in directions),
     }
 
 def assert_energy_uv_convergent(signatures: Sequence[Signature], bounds: Any):
     report = energy_divergence_report(signatures, bounds)
     if report is None:
         return None
-    bad = [item for item in report['loops'] if not item['convergent']]
+    bad = [('coordinate', item) for item in report['loops'] if not item['convergent']]
+    bad.extend(('direction', item) for item in report.get('directions', []) if not item['convergent'])
     if bad:
         details = ', '.join(
-            f"k{item['loop']}^0: degree {item['divergence_degree']} from edges {item['active_edges']}"
-            for item in bad
+            (
+                f"k{item['loop']}^0: degree {item['divergence_degree']} from edges {item['active_edges']}"
+                if kind == 'coordinate' else
+                f"direction active={item['active_edges']} zero={item['zero_edges']}: degree {item['divergence_degree']}"
+            )
+            for kind, item in bad
         )
         raise ValueError(f'Energy-degree bounds leave non-vanishing residue at infinity ({details})')
     return report
@@ -1200,8 +1374,9 @@ def build_pure_ltd_bundle(signatures,n_external_symbols=None):
         terms.append(OrientationTerm(orientation_id_from_signs(edge_orient),'pure_ltd',bc,tuple(edge_orient),pref,tuple(basis),tuple(chain),loop_exprs,edge_exprs,{'basis':list(basis),'cut_signs':cut_signs,'source':'canonical_ltd_residue'})); bc+=1
     return ExpressionBundle('pure_ltd',tuple(),tuple(),tuple(signatures),sb.build(),tuple(terms))
 
-def _build_confluent_hybrid_bundle(parsed: ParsedGraph):
+def _build_confluent_hybrid_bundle(parsed: ParsedGraph, energy_degree_bounds=None):
     signatures=tuple(e.signature for e in parsed.internal_edges)
+    bounds = normalize_energy_degree_bounds(energy_degree_bounds, len(signatures)) if energy_degree_bounds is not None else None
     n_internal=len(signatures)
     n_external=len(parsed.ext_names)
     n_loops=len(signatures[0][0])
@@ -1250,7 +1425,10 @@ def _build_confluent_hybrid_bundle(parsed: ParsedGraph):
             if order % 2:
                 residue_sign *= int(sigma)
         residue_norm=Fraction(1, _multi_factorial(alpha))
-        beta_candidates=[beta for beta in _iter_multiindices_leq(alpha) if sum(beta) <= 1]
+        if bounds is None or max(bounds) <= 1:
+            beta_candidates=[beta for beta in _iter_multiindices_leq(alpha) if sum(beta) <= 1]
+        else:
+            beta_candidates=[beta for beta in _iter_multiindices_leq(alpha)]
         active_basis=[basis_orig[i] for i,a in enumerate(alpha) if a]
         active_edges=[
             edge_id for edge_id,row in enumerate(edge_derivs)
@@ -1261,19 +1439,31 @@ def _build_confluent_hybrid_bundle(parsed: ParsedGraph):
             leibniz=Fraction(1)
             for a,b in zip(alpha,beta):
                 leibniz *= Fraction(math.comb(int(a), int(b)))
-            num_samples=_numerator_derivative_samples(
-                beta,
-                signatures,
-                channels,
-                basis_logical,
-                cut_signs,
-                alpha,
-                loop_exprs,
-                edge_exprs,
-                loop_derivs,
-                edge_derivs,
-                n_external,
-            )
+            if bounds is None or max(bounds) <= 1:
+                num_samples=_numerator_derivative_samples(
+                    beta,
+                    signatures,
+                    channels,
+                    basis_logical,
+                    cut_signs,
+                    alpha,
+                    loop_exprs,
+                    edge_exprs,
+                    loop_derivs,
+                    edge_derivs,
+                    n_external,
+                )
+            else:
+                num_samples=_bounded_numerator_derivative_samples(
+                    beta,
+                    bounds,
+                    signatures,
+                    channels,
+                    basis_logical,
+                    cut_signs,
+                    edge_derivs,
+                    n_external,
+                )
             if not num_samples:
                 continue
             den_terms=_denominator_derivative_terms(factors,gamma)
@@ -1303,6 +1493,8 @@ def _build_confluent_hybrid_bundle(parsed: ParsedGraph):
                         'repeated_groups':[list(ch.members) for ch in repeated],
                         'merge_by_numerator_map': True,
                     }
+                    if bounds is not None:
+                        meta['energy_degree_bounds'] = list(bounds)
                     meta.update(num_sample.meta)
                     terms.append(OrientationTerm(
                         label,
@@ -1319,12 +1511,12 @@ def _build_confluent_hybrid_bundle(parsed: ParsedGraph):
                     branch += 1
     return ExpressionBundle('hybrid',tuple(),tuple(),signatures,sb.build(),tuple(terms))
 
-def build_hybrid_bundle_raw(parsed):
+def build_hybrid_bundle_raw(parsed, energy_degree_bounds=None):
     rep_groups=repeated_groups(parsed); signatures=tuple(e.signature for e in parsed.internal_edges)
     if not rep_groups:
         ltd=build_pure_ltd_bundle(signatures,len(parsed.ext_names))
         return ExpressionBundle('hybrid',ltd.loop_names,ltd.ext_names,ltd.signatures,ltd.surface_cache,ltd.terms)
-    return _build_confluent_hybrid_bundle(parsed)
+    return _build_confluent_hybrid_bundle(parsed, energy_degree_bounds=energy_degree_bounds)
 
 def edge_spatial_momentum(signature, loop_spatial_momenta, external_momenta):
     loop_coeffs, ext_coeffs=signature; x=y=z=mp.mpf(0)

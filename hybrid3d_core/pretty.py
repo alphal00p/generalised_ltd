@@ -175,6 +175,14 @@ def render_pretty(
         for item in degree_report.get('loops', []):
             div_tbl.add_row([item['loop'], item['active_edges'], item['numerator_degree_bound'], item['denominator_degree'], item['divergence_degree'], item['convergent']])
         lines.append(div_tbl.get_string())
+        worst = [item for item in degree_report.get('directions', []) if not item.get('convergent')]
+        if worst:
+            dir_tbl = PrettyTable()
+            dir_tbl.field_names = [c('active_edges', Fore.CYAN + Style.BRIGHT, use_color), c('zero_edges', Fore.CYAN + Style.BRIGHT, use_color), c('nullity', Fore.CYAN + Style.BRIGHT, use_color), c('divergence', Fore.CYAN + Style.BRIGHT, use_color)]
+            for item in worst[:8]:
+                dir_tbl.add_row([item['active_edges'], item['zero_edges'], item['nullity'], item['divergence_degree']])
+            lines.append(c('Non-convergent loop-energy directions', Fore.RED + Style.BRIGHT, use_color))
+            lines.append(dir_tbl.get_string())
 
     if parsed is not None:
         ch_tbl = PrettyTable()

@@ -658,7 +658,7 @@ ordinary affine tests, but they make it possible to decide whether higher powers
 can be represented by finite-pole data alone.
 
 For each loop-energy variable \(k_i^0\), the implementation computes the
-conservative one-variable degree estimate
+coordinate degree estimate
 \[
   \delta_i
   =
@@ -666,9 +666,12 @@ conservative one-variable degree estimate
   -
   2\,\#\{e:\, \partial q_e^0/\partial k_i^0\ne0\}.
 \]
-The bounded-degree CFF completion is only emitted if every \(\delta_i<-1\).
-Otherwise the command fails, because an infinity arc could contribute and no
-finite black-box sample formula is determined by the CFF pole data alone.
+It also enumerates the flats of the hyperplane arrangement
+\(q_e^0(v)=0\) in loop-energy direction space and checks the same degree for
+every non-zero one-parameter direction \(k^0=\lambda v\).  The bounded-degree
+builders are only emitted if all coordinate and directional degrees are below
+\(-1\).  Otherwise the command fails, because an infinity arc could contribute
+and no finite black-box sample formula is determined by the CFF pole data alone.
 
 The recombination problem can be phrased algebraically.  For each denominator
 channel define
@@ -759,16 +762,30 @@ energies.  Those known factors must be reduced recursively by the same
 finite-pole division before ordinary CFF is valid on the contracted graph.
 
 The implementation therefore deliberately emits only the cases that are
-currently causal and tested:
+currently causal and tested on the pure-CFF side:
 \begin{itemize}[leftmargin=2em]
   \item one-loop non-repeated graphs with arbitrary quadratic-or-lower caps;
   \item isolated single-edge cubic caps;
   \item no LTD-contact fallback.
 \end{itemize}
-Unsupported higher contacts, multiloop pinches, and repeated-channel bounded
-hybrid sectors raise an implementation error instead of serializing
+Unsupported higher contacts and multiloop CFF pinches raise an implementation
+error instead of serializing
 \(\CFF+(\LTD-\CFF)\).  This is intentional: that fallback is a useful numerical
 identity but not the desired E-surface-only CFF representation.
+
+The repeated-channel hybrid builder has a separate bounded-degree path.  It
+keeps the confluent residue formula and reconstructs numerator derivatives by
+finite differences in the residue-basis energy coordinates.  For a derivative
+multi-index \(\beta\), the builder chooses enough integer displacement nodes
+\(a\) to interpolate the declared degree bound and samples the numerator at
+\[
+  Q_b^0=(\sigma_b+a)\omega_b
+\]
+for each active cut channel \(b\).  The finite-difference factor
+\(\omega_b^{-|\beta_b|}\) is encoded with repeated half-edge entries, exactly
+as for the ordinary residue Jacobians.  These sample maps may contain
+coefficients other than \(\pm1\); they are numerator maps only and do not create
+new denominator singularities.  The JSON evaluator is unchanged.
 
 \subsection{Status of the higher-power lift}
 
@@ -797,10 +814,9 @@ algebra rather than a single extra CFF branch.  Each sector must track
 \end{itemize}
 Only after this recursive reduction terminates can the sector be serialized as
 ordinary JSON using denominator \(E\)-surfaces and numerator-side surface
-factors.  This is the path for arbitrary caps in pure CFF.  The same sector
-algebra is also the natural implementation layer for the hybrid formula, where
-finite-pole contacts must be combined with the confluent repeated-channel
-residue weights.
+factors.  This is the path for arbitrary caps in pure CFF.  The repeated-channel
+hybrid path does not need CFF contact minors: it uses the existing confluent
+denominator formula and replaces numerator derivatives by finite samples.
 
 The quadratic case \(d_e\le2\) is special and substantially easier.  The quotient
 \eqref{eq:quadratic-contact} is independent of \(q_e^0\), so no known
@@ -814,68 +830,51 @@ equivalent to this operation in general.  This is why the current public builder
 keeps the multiloop guard even though the one-loop quadratic formula is already
 implemented and tested.
 
-The intended implementation order is therefore:
+The remaining pure-CFF implementation order is therefore:
 \begin{enumerate}[leftmargin=2em]
   \item complete the pure-CFF quadratic contact lift for arbitrary convergent
         combinations of quadratic edges, validating every sector directly
         against LTD;
-  \item extend the same quadratic contact operator to repeated-channel hybrid
-        sectors, preserving the collapse to LTD when no repeated propagator is
-        present;
   \item add the recursive known-polynomial sector algebra needed for cubic,
         quartic, and mixed higher-power caps.
 \end{enumerate}
 
 \subsection{Higher powers on repeated channels}
 
-The same numerator-surface mechanism should also extend the repeated-channel
-part of the hybrid master formula.  Let a repeated group \(g\) have collapsed
-denominator power \(\nu_g\) and channel energy \(Q_g^0\).  If the numerator has
-a capped polynomial dependence on \(Q_g^0\), divide it recursively by
+For repeated-channel hybrid sectors the implemented bounded-degree path keeps
+the confluent residue formula itself.  Let \(y_b=Q_b^0\) be the residue-basis
+energy coordinate of a cut repeated channel.  The master formula contains
+derivatives
 \[
-  D_g=(Q_g^0)^2-\omega_g^2 .
+  \partial_y^\beta N(y)\big|_{y_b=\sigma_b\omega_b},
+  \qquad 0\le\beta_b\le \nu_b-1 .
 \]
-Equivalently,
+When degree bounds are supplied, these derivatives are reconstructed by
+multivariate finite interpolation instead of differentiating the numerator.
+For each active coordinate \(b\), the implementation chooses integer nodes
+\(a_j\) large enough for the conservative degree bound of \(N\) in \(y_b\) and
+solves
 \[
-  N
-  =
-  R_0
-  +D_g R_1
-  +D_g^2 R_2
-  +\cdots ,
-  \qquad
-  \deg_{Q_g^0}R_r\le1 .
+  \sum_j w_j a_j^r = \delta_{r,\beta_b}\,\beta_b!,
+  \qquad 0\le r\le d_b .
 \]
-Inserted against \(D_g^{-\nu_g}\), the term \(D_g^rR_r\) reduces the repeated
-power to \(D_g^{-(\nu_g-r)}\) while \(r<\nu_g\).  If all copies are cancelled,
-the corresponding channel is pinched out of the collapsed graph.  Thus high
-numerator powers on a repeated channel become a finite sum of lower-power
-hybrid sectors plus known numerator-side energy factors.
+The numerator is then sampled at
+\[
+  y_b=(\sigma_b+a_j)\omega_b .
+\]
+For mixed derivatives the weights are tensor products over the active basis
+coordinates.  The factor \(\omega_b^{-\beta_b}\) is represented by adding
+\(\beta_b\) copies of the corresponding channel representative to
+\texttt{half\_edges} and multiplying the rational prefactor by
+\(2^{\beta_b}\).  Thus the JSON evaluator still sees only ordinary numerator
+calls at explicit edge-energy maps and ordinary denominator trees.
 
-This is exactly what is needed to preserve the black-box numerator contract.
-The confluent residue of a cut repeated channel differentiates only the known
-factors generated by the division and the known causal denominators.  The
-remainder \(R_r\), being affine in the active channel energy, is reconstructed
-from finitely many black-box samples as in the current hybrid interpolation.
-For multivariate EMR numerators the division is performed in the ideal generated
-by the active channel denominators \(D_g\).  The quotient weights can contain
-mixed-sign linear energy forms; these are acceptable as numerator-only
-\(H\)-class surface-cache entries because they are polynomial multipliers, not
-poles.
-
-The expected fully causal high-degree hybrid form is therefore
-\[
-  \sum_{\text{pinch forests }F}
-  \CFF_{\rm hybrid}\!\left(G/F,\{\nu_g-r_g\}\right)
-  \times
-  \prod_{a\in A_F} S_a ,
-\]
-where every denominator tree is built from ordinary CFF \(E\)-surfaces of the
-appropriate collapsed or pinched graph, and each \(S_a\) is a cached
-numerator-side surface id.  The remaining implementation work is mechanical but
-nontrivial: choose a deterministic multivariate division order, emit unit
-denominator sectors when all powers of a channel cancel, and control the growth
-of interpolation samples from the user-provided degree caps.
+This bounded hybrid path is not the same as the future E-surface-only pure-CFF
+contact completion.  It is a direct finite-sample implementation of the
+confluent repeated-pole residue and is validated numerically by comparing to the
+split-mass LTD limit.  If no repeated propagators are present, the hybrid family
+continues to collapse to the ordinary LTD structure for any declared degree
+bound that passes the UV check.
 
 \section{Testing requirements}
 

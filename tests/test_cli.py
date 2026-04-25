@@ -10,7 +10,9 @@ from hybrid3d_core.orientation_bundle import (
     LinearEnergyExpr,
     OrientationTerm,
     SurfaceCacheBuilder,
+    assert_energy_uv_convergent,
     compute_internal_E_values,
+    energy_divergence_report,
 )
 from hybrid3d_core.structure import minimal_structure_from_bundle, evaluate_minimal_bundle
 from hybrid3d_core.structure import numerator_from_expr
@@ -246,9 +248,29 @@ def test_bounded_degree_hybrid_without_repeats_still_collapses_to_ltd():
         item['graph'].pop('energy_divergence', None)
     assert hybrid_cmp == ltd_cmp
 
-def test_bounded_degree_hybrid_repeated_requires_new_contact_lift():
-    with pytest.raises(NotImplementedError, match='Bounded-degree hybrid for repeated propagators'):
-        build_structure(dot('box_pow3.dot'), 'hybrid', energy_degree_bounds={0: 2})
+def test_bounded_degree_hybrid_repeated_matches_split_mass_ltd_limit():
+    d = dot('box_pow3.dot')
+    parsed = GIO.parse_dot_graph(d)
+    ext4, loop3, default_masses = __import__('hybrid3d_core.api').api._random_default_inputs(d, 1337)
+    masses = {**default_masses, **BOX_MASSES}
+    hybrid = build_structure(d, 'hybrid', energy_degree_bounds={3: 3})
+    assert hybrid['backend'] == 'bounded_degree_hybrid_bundle'
+    assert any(
+        var['meta'].get('numerator_sample_kind') == 'bounded_degree_finite_difference'
+        for orient in hybrid['orientations']
+        for var in orient['variants']
+    )
+    numerator = 'edges[3][0]**3'
+    hval = evaluate_structure(hybrid, d, ext4, loop3, numerator, 80, masses)
+
+    split_dot, _ = GIO.build_split_mass_dot(d)
+    coarse = GIO.build_split_mass_assignments(parsed, masses, '0.01')
+    fine = GIO.build_split_mass_assignments(parsed, masses, '0.001')
+    ltd = build_structure(split_dot, 'ltd', energy_degree_bounds={3: 3})
+    coarse_diff = abs(hval - evaluate_structure(ltd, split_dot, ext4, loop3, numerator, 80, coarse))
+    fine_diff = abs(hval - evaluate_structure(ltd, split_dot, ext4, loop3, numerator, 80, fine))
+    assert fine_diff < coarse_diff * mp.mpf('0.02')
+    assert fine_diff < mp.mpf('1e-7')
 
 def test_hybrid_surfaces_have_unit_energy_coefficients():
     for path in (ROOT/'examples').glob('*.dot'):
@@ -621,6 +643,18 @@ def test_bounded_degree_cff_rejects_nonconvergent_energy_bounds():
     split_dot = dot('box.dot')
     with pytest.raises(ValueError, match='residue at infinity'):
         build_structure(split_dot, 'cff', energy_degree_bounds={0: 7})
+
+def test_energy_uv_check_scans_noncoordinate_loop_directions():
+    signatures = (
+        ((1, 0), tuple()),
+        ((0, 1), tuple()),
+        ((1, -1), tuple()),
+    )
+    report = energy_divergence_report(signatures, [2, 2, 0])
+    assert report['coordinate_convergent'] is True
+    assert report['directional_convergent'] is False
+    with pytest.raises(ValueError, match='direction active='):
+        assert_energy_uv_convergent(signatures, [2, 2, 0])
 
 def test_bounded_degree_cff_rejects_unimplemented_higher_contact_recursion():
     split_dot = dot('box.dot')
