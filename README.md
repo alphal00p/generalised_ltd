@@ -47,6 +47,20 @@ It prints pretty overviews for LTD, CFF, and hybrid structures, runs the
 three-way comparison, compiles real and complex Symbolica evaluators, and
 profiles built-in versus compiled evaluation.
 
+The five-loop runtime comparison script builds and compiles LTD, CFF, and
+hybrid evaluators for a non-repeated four-external five-loop graph and for the
+existing repeated five-loop graph:
+
+```bash
+examples/scripts/five_loop_symbolica_runtime_compare.sh
+```
+
+For each graph it profiles three numerator choices: `1`, a sum with one
+dot-product term for every internal edge, and the same sum with three selected
+edge terms squared.  The squared-edge scenario intentionally exercises the
+bounded-degree builders and can take substantially longer to compile than the
+timed evaluation itself.
+
 Inspect one orientation in detail:
 
 ```bash
@@ -88,6 +102,20 @@ python3 hybrid3d.py evaluate \
 
 python3 hybrid3d.py evaluate \
   --orientation-json demo/box_hybrid.json \
+  --dot examples/graphs/box_pow3.dot \
+  --use-symbolica \
+  --profiling 10000 \
+  --masses '{"m1":0.8,"m2":1.1,"m3":0.9,"m4":1.2}'
+```
+
+Compare several compiled JSON evaluators in one timing table:
+
+```bash
+python3 hybrid3d.py evaluate \
+  --orientation-json demo/box_ltd.json \
+  --profile-label ltd \
+  --profile-json cff=demo/box_cff.json \
+  --profile-json hybrid=demo/box_hybrid.json \
   --dot examples/graphs/box_pow3.dot \
   --use-symbolica \
   --profiling 10000 \
@@ -218,6 +246,7 @@ The default suite includes:
 - repeated-propagator three-way diagnostics,
 - bounded-degree CFF/LTD checks for supported caps,
 - Symbolica compiled-evaluator checks when the optional package is installed,
+- a non-repeated four-external five-loop graph,
 - a four-loop repeated-channel stress topology.
 
 The old five-loop ultimate basis alignment test is still present but slow.  Run

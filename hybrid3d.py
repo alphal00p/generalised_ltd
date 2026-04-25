@@ -2,6 +2,17 @@
 from __future__ import annotations
 import argparse, json, pathlib, sys, time
 import mpmath as mp
+try:
+    from prettytable import PrettyTable
+except Exception:  # pragma: no cover - optional dependency fallback
+    PrettyTable = None
+try:
+    from colorama import Fore, Style, init as colorama_init
+    colorama_init()
+except Exception:  # pragma: no cover - optional dependency fallback
+    class _NoColor:
+        BLACK = RED = GREEN = YELLOW = BLUE = MAGENTA = CYAN = WHITE = RESET_ALL = BRIGHT = NORMAL = DIM = ''
+    Fore = Style = _NoColor()
 ROOT = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 from src import load_dot_graph, validate_graph, build_structure, evaluate_structure, compare_three_modes, pretty_structure, run_test, run_cff_ltd_test
@@ -74,6 +85,94 @@ def parse_energy_degree_bounds(arg):
     return out
 
 
+def _profile_target_from_arg(item: str) -> tuple[str, pathlib.Path]:
+    if '=' in item:
+        label, path = item.split('=', 1)
+        label = label.strip()
+        path = path.strip()
+        if not label or not path:
+            raise SystemExit(f'Invalid --profile-json target {item!r}; use LABEL=PATH')
+        return label, pathlib.Path(path)
+    path = pathlib.Path(item)
+    return path.stem, path
+
+
+def _color(text: str, style: str, use_color: bool) -> str:
+    return f'{style}{text}{Style.RESET_ALL}' if use_color else text
+
+
+def _render_profile_table(rows, use_color: bool = True) -> str:
+    if not rows:
+        return ''
+    if PrettyTable is None:
+        header = ['label', 'family', 'value type', 'orientations', 'maps', 'per sample', 'relative']
+        lines = ['\t'.join(header)]
+        lines.extend('\t'.join(str(row[k]) for k in ('label', 'family', 'value_type', 'orientations', 'maps', 'per_sample', 'relative')) for row in rows)
+        return '\n'.join(lines)
+    table = PrettyTable()
+    table.field_names = [
+        _color('label', Fore.CYAN + Style.BRIGHT, use_color),
+        _color('family', Fore.CYAN + Style.BRIGHT, use_color),
+        _color('value', Fore.CYAN + Style.BRIGHT, use_color),
+        _color('orient', Fore.CYAN + Style.BRIGHT, use_color),
+        _color('maps', Fore.CYAN + Style.BRIGHT, use_color),
+        _color('per sample', Fore.CYAN + Style.BRIGHT, use_color),
+        _color('relative', Fore.CYAN + Style.BRIGHT, use_color),
+    ]
+    for idx, row in enumerate(rows):
+        label_style = Fore.GREEN + Style.BRIGHT if idx == 0 else Fore.WHITE
+        rel_style = Fore.GREEN if idx == 0 else (Fore.YELLOW if row['relative_ratio'] > 1 else Fore.BLUE)
+        table.add_row([
+            _color(row['label'], label_style, use_color),
+            row['family'],
+            row['value_type'],
+            row['orientations'],
+            row['maps'],
+            row['per_sample'],
+            _color(row['relative'], rel_style, use_color),
+        ])
+    return str(table)
+
+
+def _profile_symbolica_targets(targets, dot, json_path, ext4, loop3, masses, batch_size: int, use_color: bool):
+    if batch_size < 1:
+        raise SystemExit('--profiling must be positive')
+    rows = []
+    base_seconds = None
+    for label, path in targets:
+        if not path.exists():
+            raise SystemExit(f'Profile target JSON does not exist: {path}')
+        data = json.loads(path.read_text())
+        val, profile = SYMEVAL.evaluate_symbolica(
+            data,
+            dot,
+            path,
+            ext4,
+            loop3,
+            masses,
+            batch_size=batch_size,
+            profile=True,
+        )
+        seconds = profile['seconds_per_sample']
+        if base_seconds is None:
+            base_seconds = seconds
+        ratio = seconds / base_seconds if base_seconds else 1.0
+        metadata = data.get('evaluator', {})
+        rows.append({
+            'label': label,
+            'family': data.get('family', '?'),
+            'value_type': metadata.get('value_type', '?'),
+            'orientations': len(data.get('orientations', [])),
+            'maps': metadata.get('map_count', '?'),
+            'per_sample': SYMEVAL.format_duration(seconds),
+            'relative': f'{100 * ratio:.1f}%',
+            'relative_ratio': ratio,
+            'value': str(val),
+            'seconds_per_sample': seconds,
+        })
+    print(_render_profile_table(rows, use_color=use_color))
+
+
 def cmd_validate(args):
     dot = load_dot_graph(args.dot)
     res = validate_graph(dot)
@@ -139,6 +238,17 @@ def cmd_evaluate(args):
     data = parse_json_arg(args.orientation_json)
     dot = load_dot_graph(args.dot)
     ext4, loop3, masses = resolve_evaluate_inputs(dot, args)
+    if args.profile_json:
+        if not args.profiling:
+            raise SystemExit('--profile-json requires --profiling')
+        if not args.use_symbolica:
+            raise SystemExit('--profile-json currently profiles compiled Symbolica evaluators; add --use-symbolica')
+        if not pathlib.Path(args.orientation_json).exists():
+            raise SystemExit('--profile-json requires --orientation-json to be a JSON file path')
+        targets = [(args.profile_label, pathlib.Path(args.orientation_json))]
+        targets.extend(_profile_target_from_arg(item) for item in args.profile_json)
+        _profile_symbolica_targets(targets, dot, pathlib.Path(args.orientation_json), ext4, loop3, masses, int(args.profiling), use_color=not args.no_color)
+        return
     if args.use_symbolica:
         json_path = pathlib.Path(args.orientation_json)
         if not json_path.exists():
@@ -341,6 +451,9 @@ def main():
     e.add_argument('--seed', type=int, default=1337)
     e.add_argument('--use-symbolica', action='store_true')
     e.add_argument('--profiling', type=int, help='Evaluate this many identical samples and report timing')
+    e.add_argument('--profile-label', default='baseline', help='Label for --orientation-json in a multi-JSON profiling table')
+    e.add_argument('--profile-json', action='append', help='Additional JSON to profile as LABEL=PATH; repeat to compare several compiled structures')
+    e.add_argument('--no-color', action='store_true', help='Disable color in multi-JSON profiling tables')
     e.set_defaults(func=cmd_evaluate)
 
     comp = sub.add_parser('compile')

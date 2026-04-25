@@ -177,6 +177,19 @@ def test_box_pow3_showcase_script_is_executable():
     assert script.exists()
     assert os.access(script, os.X_OK)
 
+def test_five_loop_runtime_script_is_executable():
+    script = ROOT / 'examples' / 'scripts' / 'five_loop_symbolica_runtime_compare.sh'
+    assert script.exists()
+    assert os.access(script, os.X_OK)
+
+def test_five_loop_no_repeats_graph_has_four_externals_and_no_repeats():
+    d = dot('five_loop_no_repeats.dot')
+    validation = validate_graph(d)
+    assert validation['ok']
+    assert validation['n_loops_from_labels'] == 5
+    assert validation['n_external_symbols'] == 4
+    assert validation['repeated_groups'] == []
+
 def test_graph_from_signatures_cli_stdout_round_trips_prop_expression():
     expr = 'prop(k1+p1,mA)*prop(k1+p1-q1,mB)*prop(k1-p2+q2,mC)*prop(k1,mD)'
     expected_signatures, expected_loop_names, expected_ext_names, expected_masses = SIG2G.extract_signatures_and_masses_from_symbolica_expression(
@@ -362,6 +375,37 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
     assert profile['batch_size'] == 8
     assert profile['seconds_per_sample'] > 0
     assert profile['per_sample'].endswith(('us', 'ms', 's'))
+
+    profile_table = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'evaluate',
+            '--orientation-json',
+            str(json_path),
+            '--profile-label',
+            'cff-a',
+            '--profile-json',
+            f'cff-b={json_path}',
+            '--dot',
+            str(ROOT / 'examples' / 'graphs' / 'box.dot'),
+            '--use-symbolica',
+            '--profiling',
+            '2',
+            '--masses',
+            masses,
+            '--seed',
+            '1337',
+            '--no-color',
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    assert 'cff-a' in profile_table.stdout
+    assert 'cff-b' in profile_table.stdout
+    assert 'relative' in profile_table.stdout
+    assert '100.0%' in profile_table.stdout
 
     builtin_profiled = subprocess.run(
         [
