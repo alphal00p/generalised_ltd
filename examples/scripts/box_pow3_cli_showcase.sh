@@ -127,5 +127,25 @@ run python3 hybrid3d.py evaluate \
   --seed 1337 \
   | tee "$OUT/profile_symbolica_complex.json"
 
+section "Profiling table: all Symbolica evaluator modes"
+printf '\n$ python3 hybrid3d.py evaluate --orientation-json %q --profile-label hybrid-real --profile-json hybrid-complex=%q --dot %q --masses %q --evaluator-backend symbolica --profiling %q --seed 1337 --no-color | tee %q\n' \
+  "$OUT/box_pow3_hybrid_symbolica_real.json" \
+  "$OUT/box_pow3_hybrid_symbolica_complex.json" \
+  "$DOT" \
+  "$MASSES" \
+  "$BATCH" \
+  "$OUT/profile_table.txt"
+python3 hybrid3d.py evaluate \
+  --orientation-json "$OUT/box_pow3_hybrid_symbolica_real.json" \
+  --profile-label hybrid-real \
+  --profile-json "hybrid-complex=$OUT/box_pow3_hybrid_symbolica_complex.json" \
+  --dot "$DOT" \
+  --masses "$MASSES" \
+  --evaluator-backend symbolica \
+  --profiling "$BATCH" \
+  --seed 1337 \
+  --no-color \
+  | tee "$OUT/profile_table.txt"
+
 section "Outputs"
 printf 'Wrote demo artifacts to %s\n' "$OUT"
