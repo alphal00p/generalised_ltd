@@ -105,9 +105,9 @@ def _render_profile_table(rows, use_color: bool = True) -> str:
     if not rows:
         return ''
     if PrettyTable is None:
-        header = ['label', 'backend', 'family', 'value type', 'orientations', 'maps', 'per sample', 'relative']
+        header = ['label', 'backend', 'family', 'value type', 'edges', 'externals', 'orientations', 'maps', 'per sample', 'relative']
         lines = ['\t'.join(header)]
-        lines.extend('\t'.join(str(row[k]) for k in ('label', 'backend', 'family', 'value_type', 'orientations', 'maps', 'per_sample', 'relative')) for row in rows)
+        lines.extend('\t'.join(str(row[k]) for k in ('label', 'backend', 'family', 'value_type', 'internal_edges', 'external_symbols', 'orientations', 'maps', 'per_sample', 'relative')) for row in rows)
         return '\n'.join(lines)
     table = PrettyTable()
     table.field_names = [
@@ -115,7 +115,9 @@ def _render_profile_table(rows, use_color: bool = True) -> str:
         _color('backend', Fore.CYAN + Style.BRIGHT, use_color),
         _color('family', Fore.CYAN + Style.BRIGHT, use_color),
         _color('value', Fore.CYAN + Style.BRIGHT, use_color),
-        _color('orient', Fore.CYAN + Style.BRIGHT, use_color),
+        _color('edges', Fore.CYAN + Style.BRIGHT, use_color),
+        _color('ext', Fore.CYAN + Style.BRIGHT, use_color),
+        _color('orientations', Fore.CYAN + Style.BRIGHT, use_color),
         _color('maps', Fore.CYAN + Style.BRIGHT, use_color),
         _color('per sample', Fore.CYAN + Style.BRIGHT, use_color),
         _color('relative', Fore.CYAN + Style.BRIGHT, use_color),
@@ -128,6 +130,8 @@ def _render_profile_table(rows, use_color: bool = True) -> str:
             row['backend'],
             row['family'],
             row['value_type'],
+            row['internal_edges'],
+            row['external_symbols'],
             row['orientations'],
             row['maps'],
             row['per_sample'],
@@ -157,6 +161,7 @@ def _profile_symbolica_targets(targets, dot, ext4, loop3, masses, batch_size: in
             if mode not in SYMEVAL.available_symbolica_evaluator_modes(data):
                 continue
             metadata = SYMEVAL.symbolica_evaluator_metadata(data, mode)
+            graph = data.get('graph', {})
             val, profile = SYMEVAL.evaluate_symbolica(
                 data,
                 dot,
@@ -177,6 +182,8 @@ def _profile_symbolica_targets(targets, dot, ext4, loop3, masses, batch_size: in
                 'backend': mode,
                 'family': data.get('family', '?'),
                 'value_type': metadata.get('value_type', '?'),
+                'internal_edges': graph.get('n_internal_edges', '?'),
+                'external_symbols': len(graph.get('ext_names', [])) if isinstance(graph.get('ext_names'), list) else '?',
                 'orientations': len(data.get('orientations', [])),
                 'maps': metadata.get('map_count', '?'),
                 'per_sample': SYMEVAL.format_duration(seconds),

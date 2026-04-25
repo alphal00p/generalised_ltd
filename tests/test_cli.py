@@ -472,6 +472,9 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
     assert 'symbolica_compiled' in profile_table.stdout
     assert 'symbolica_eager' in profile_table.stdout
     assert 'symbolica_eager_symjit' in profile_table.stdout
+    assert 'edges' in profile_table.stdout
+    assert 'ext' in profile_table.stdout
+    assert 'orientations' in profile_table.stdout
     assert 'relative' in profile_table.stdout
     assert '100.0%' in profile_table.stdout
 
