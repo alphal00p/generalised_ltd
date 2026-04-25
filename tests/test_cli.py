@@ -233,6 +233,304 @@ def test_graph_from_signatures_cli_writes_vakint_dot_file(tmp_path):
     assert actual_ext_names == expected_ext_names
     assert validate_graph(generated)['ok']
 
+def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
+    pytest.importorskip('symbolica')
+    json_path = tmp_path / 'box_cff.json'
+    so_path = tmp_path / 'box_cff_eval.so'
+    numerator = 'dot(edges[0], ext[0]) + edges[1][0]'
+    masses = json.dumps(BOX_MASSES)
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'build',
+            '--family',
+            'cff',
+            '--dot',
+            str(ROOT / 'examples' / 'box.dot'),
+            '--json-out',
+            str(json_path),
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'compile',
+            '--orientation-json',
+            str(json_path),
+            '--dot',
+            str(ROOT / 'examples' / 'box.dot'),
+            '--numerator-expr',
+            numerator,
+            '--output',
+            str(so_path),
+            '--inline-asm',
+            'none',
+            '--optimization-level',
+            '0',
+            '--n-cores',
+            '1',
+            '--no-native',
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    compiled_json = json.loads(json_path.read_text())
+    assert compiled_json['evaluator']['library'] == so_path.name
+    assert so_path.exists()
+
+    internal = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'evaluate',
+            '--orientation-json',
+            str(json_path),
+            '--dot',
+            str(ROOT / 'examples' / 'box.dot'),
+            '--numerator-expr',
+            numerator,
+            '--masses',
+            masses,
+            '--seed',
+            '1337',
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    symbolica = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'evaluate',
+            '--orientation-json',
+            str(json_path),
+            '--dot',
+            str(ROOT / 'examples' / 'box.dot'),
+            '--use-symbolica',
+            '--masses',
+            masses,
+            '--seed',
+            '1337',
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    assert abs(float(internal.stdout.strip()) - float(symbolica.stdout.strip())) < 1e-10
+
+    profiled = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'evaluate',
+            '--orientation-json',
+            str(json_path),
+            '--dot',
+            str(ROOT / 'examples' / 'box.dot'),
+            '--use-symbolica',
+            '--profiling',
+            '8',
+            '--masses',
+            masses,
+            '--seed',
+            '1337',
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    profile = json.loads(profiled.stdout)
+    assert profile['batch_size'] == 8
+    assert profile['seconds_per_sample'] > 0
+    assert profile['per_sample'].endswith(('us', 'ms', 's'))
+
+    complex_json = tmp_path / 'box_cff_complex.json'
+    complex_so = tmp_path / 'box_cff_complex_eval.so'
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'compile',
+            '--orientation-json',
+            str(json_path),
+            '--dot',
+            str(ROOT / 'examples' / 'box.dot'),
+            '--numerator-expr',
+            numerator,
+            '--output',
+            str(complex_so),
+            '--json-out',
+            str(complex_json),
+            '--value-type',
+            'complex',
+            '--inline-asm',
+            'none',
+            '--optimization-level',
+            '0',
+            '--n-cores',
+            '1',
+            '--no-native',
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    complex_symbolica = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'evaluate',
+            '--orientation-json',
+            str(complex_json),
+            '--dot',
+            str(ROOT / 'examples' / 'box.dot'),
+            '--use-symbolica',
+            '--masses',
+            masses,
+            '--seed',
+            '1337',
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    complex_value = complex(complex_symbolica.stdout.strip())
+    assert abs(float(internal.stdout.strip()) - complex_value.real) < 1e-10
+    assert abs(complex_value.imag) < 1e-14
+
+def test_symbolica_hybrid_compile_matches_builtin_double(tmp_path):
+    pytest.importorskip('symbolica')
+    json_path = tmp_path / 'box_pow3_hybrid.json'
+    so_path = tmp_path / 'box_pow3_hybrid_eval.so'
+    numerator = 'dot(edges[0], ext[0]) + edges[3][0]'
+    masses = json.dumps(BOX_MASSES)
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'build',
+            '--family',
+            'hybrid',
+            '--dot',
+            str(ROOT / 'examples' / 'box_pow3.dot'),
+            '--json-out',
+            str(json_path),
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'compile',
+            '--orientation-json',
+            str(json_path),
+            '--dot',
+            str(ROOT / 'examples' / 'box_pow3.dot'),
+            '--numerator-expr',
+            numerator,
+            '--output',
+            str(so_path),
+            '--inline-asm',
+            'none',
+            '--optimization-level',
+            '0',
+            '--n-cores',
+            '1',
+            '--no-native',
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    internal = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'evaluate',
+            '--orientation-json',
+            str(json_path),
+            '--dot',
+            str(ROOT / 'examples' / 'box_pow3.dot'),
+            '--numerator-expr',
+            numerator,
+            '--masses',
+            masses,
+            '--seed',
+            '1337',
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    symbolica = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'evaluate',
+            '--orientation-json',
+            str(json_path),
+            '--dot',
+            str(ROOT / 'examples' / 'box_pow3.dot'),
+            '--use-symbolica',
+            '--masses',
+            masses,
+            '--seed',
+            '1337',
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    assert abs(float(internal.stdout.strip()) - float(symbolica.stdout.strip())) < 5e-10
+
+def test_symbolica_evaluate_errors_without_compiled_metadata(tmp_path):
+    pytest.importorskip('symbolica')
+    json_path = tmp_path / 'box_cff.json'
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'build',
+            '--family',
+            'cff',
+            '--dot',
+            str(ROOT / 'examples' / 'box.dot'),
+            '--json-out',
+            str(json_path),
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'evaluate',
+            '--orientation-json',
+            str(json_path),
+            '--dot',
+            str(ROOT / 'examples' / 'box.dot'),
+            '--use-symbolica',
+            '--masses',
+            json.dumps(BOX_MASSES),
+        ],
+        text=True,
+        capture_output=True,
+    )
+    assert proc.returncode != 0
+    assert 'no evaluator metadata' in proc.stderr.lower()
+
 def test_cff_box_surface_shifts_have_unit_external_coefficients_and_internal_ose_head():
     data = build_structure(dot('box_pow3.dot'), 'cff')
     assert data['family'] == 'cff'

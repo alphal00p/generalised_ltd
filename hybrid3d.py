@@ -4,7 +4,9 @@ import argparse, json, pathlib, sys
 ROOT = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 from src import load_dot_graph, validate_graph, build_structure, evaluate_structure, compare_three_modes, pretty_structure, run_test, run_cff_ltd_test
+from src.api import _random_default_inputs
 from src import graph_signatures as SIG2G
+from src import symbolica_eval as SYMEVAL
 
 
 def parse_json_arg(s: str):
@@ -26,6 +28,23 @@ def maybe_parse_four_vectors(arg):
     if arg is None:
         return None
     return [tuple(x) for x in parse_json_arg(arg)]
+
+
+def resolve_evaluate_inputs(dot, args):
+    ext4 = maybe_parse_four_vectors(args.external)
+    loop3 = maybe_parse_four_vectors(args.loop3)
+    user_masses = parse_mass_map(args)
+    if ext4 is not None and loop3 is not None and user_masses is not None:
+        return ext4, loop3, user_masses
+    rnd_ext4, rnd_loop3, rnd_masses = _random_default_inputs(dot, args.seed)
+    masses = dict(rnd_masses)
+    if user_masses:
+        masses.update({str(k): v for k, v in user_masses.items()})
+    return (
+        rnd_ext4 if ext4 is None else ext4,
+        rnd_loop3 if loop3 is None else loop3,
+        masses,
+    )
 
 
 def parse_epsilons_arg(arg):
@@ -117,16 +136,71 @@ def cmd_build(args):
 def cmd_evaluate(args):
     data = parse_json_arg(args.orientation_json)
     dot = load_dot_graph(args.dot)
-    ext4 = maybe_parse_four_vectors(args.external)
-    loop3 = maybe_parse_four_vectors(args.loop3)
-    masses = parse_mass_map(args)
-    if ext4 is None or loop3 is None or masses is None:
-        rep = run_test(dot, ext4=ext4, loop3=loop3, numerator_expr=args.numerator_expr, dps=args.dps, mass_map=masses, seed=args.seed)
-        ext4 = [tuple(x) for x in rep['external']]
-        loop3 = [tuple(x) for x in rep['loop3']]
-        masses = rep['masses']
-    val = evaluate_structure(data, dot, ext4, loop3, args.numerator_expr, args.dps, masses)
+    ext4, loop3, masses = resolve_evaluate_inputs(dot, args)
+    if args.use_symbolica:
+        json_path = pathlib.Path(args.orientation_json)
+        if not json_path.exists():
+            raise SystemExit('--use-symbolica requires --orientation-json to be a JSON file path')
+        compiled_num = data.get('evaluator', {}).get('numerator_expr')
+        if args.numerator_expr is not None and compiled_num is not None and args.numerator_expr != compiled_num:
+            raise SystemExit(f'Compiled Symbolica numerator is {compiled_num!r}, got --numerator-expr {args.numerator_expr!r}')
+        val, profile = SYMEVAL.evaluate_symbolica(
+            data,
+            dot,
+            json_path,
+            ext4,
+            loop3,
+            masses,
+            batch_size=args.profiling or 1,
+        )
+        if profile:
+            print(json.dumps({
+                'value': str(val),
+                'batch_size': profile['batch_size'],
+                'total_time': SYMEVAL.format_duration(profile['total_seconds']),
+                'per_sample': SYMEVAL.format_duration(profile['seconds_per_sample']),
+                'total_seconds': profile['total_seconds'],
+                'seconds_per_sample': profile['seconds_per_sample'],
+            }, indent=2))
+        else:
+            print(val)
+        return
+    val = evaluate_structure(data, dot, ext4, loop3, args.numerator_expr or '1', args.dps, masses)
     print(val)
+
+
+def cmd_compile(args):
+    json_path = pathlib.Path(args.orientation_json)
+    if not json_path.exists():
+        raise SystemExit('--orientation-json must be a file path for compile')
+    data = json.loads(json_path.read_text())
+    dot = load_dot_graph(args.dot)
+    out_json = pathlib.Path(args.json_out) if args.json_out else json_path
+    compiler_flags = None
+    if args.compiler_flags:
+        compiler_flags = [x for item in args.compiler_flags for x in item.split() if x]
+    metadata = SYMEVAL.compile_symbolica_evaluator(
+        data,
+        dot,
+        numerator_expr=args.numerator_expr,
+        json_path=out_json,
+        output_path=pathlib.Path(args.output) if args.output else None,
+        value_type=args.value_type,
+        function_name=args.function_name,
+        inline_asm=args.inline_asm,
+        optimization_level=args.optimization_level,
+        native=not args.no_native,
+        n_cores=args.n_cores,
+        iterations=args.iterations,
+        cpe_iterations=args.cpe_iterations,
+        compiler_path=args.compiler_path,
+        compiler_flags=compiler_flags,
+        keep_cpp=args.keep_cpp,
+    )
+    data['evaluator'] = metadata
+    out_json.parent.mkdir(parents=True, exist_ok=True)
+    out_json.write_text(json.dumps(data, indent=2))
+    print(json.dumps(metadata, indent=2))
 
 
 def cmd_compare(args):
@@ -223,12 +297,33 @@ def main():
     e.add_argument('--dot', required=True)
     e.add_argument('--external')
     e.add_argument('--loop3')
-    e.add_argument('--numerator-expr', default='1')
+    e.add_argument('--numerator-expr')
     e.add_argument('--dps', type=int, default=80)
     e.add_argument('--masses')
     e.add_argument('--masses-file')
     e.add_argument('--seed', type=int, default=1337)
+    e.add_argument('--use-symbolica', action='store_true')
+    e.add_argument('--profiling', type=int, help='Evaluate this many identical samples with the compiled Symbolica evaluator')
     e.set_defaults(func=cmd_evaluate)
+
+    comp = sub.add_parser('compile')
+    comp.add_argument('--orientation-json', required=True)
+    comp.add_argument('--dot', required=True)
+    comp.add_argument('--numerator-expr', default='1')
+    comp.add_argument('--output')
+    comp.add_argument('--json-out')
+    comp.add_argument('--value-type', choices=['real', 'complex'], default='real')
+    comp.add_argument('--function-name')
+    comp.add_argument('--inline-asm', default='default', choices=['default', 'x64', 'avx2', 'aarch64', 'none'])
+    comp.add_argument('--optimization-level', type=int, default=3, choices=[0, 1, 2, 3])
+    comp.add_argument('--no-native', action='store_true')
+    comp.add_argument('--n-cores', type=int, default=4)
+    comp.add_argument('--iterations', type=int, default=1)
+    comp.add_argument('--cpe-iterations', type=int)
+    comp.add_argument('--compiler-path')
+    comp.add_argument('--compiler-flags', action='append')
+    comp.add_argument('--keep-cpp', action='store_true')
+    comp.set_defaults(func=cmd_compile)
 
     c = sub.add_parser('compare')
     c.add_argument('--dot', required=True)

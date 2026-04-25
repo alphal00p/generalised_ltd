@@ -1,5 +1,7 @@
 mpmath
+numpy
 pydot
 prettytable
 colorama
 pytest
+symbolica

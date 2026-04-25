@@ -24,6 +24,18 @@ python3 hybrid3d.py build --family cff --dot examples/box.dot --pretty
 python3 hybrid3d.py build --family hybrid --dot examples/box_pow3.dot --pretty
 ```
 
+Build a DOT graph from a propagator-signature expression:
+
+```bash
+python3 hybrid3d.py graph_from_signatures \
+  --signatures 'prop(k1+p1,mA)*prop(k1+p1-q1,mB)*prop(k1-p2+q2,mC)*prop(k1,mD)' \
+  --dot-output demo/from_signatures.dot
+```
+
+The default output uses the same DOT conventions as the examples.  Use
+`--format vakint` for the compact single-`ext` node format with ordered edge ids
+and `lmb_id` attributes.
+
 Inspect one orientation in detail:
 
 ```bash
@@ -46,6 +58,36 @@ python3 hybrid3d.py evaluate \
   --masses '{"m1":0.8,"m2":1.1,"m3":0.9,"m4":1.2}' \
   --numerator-expr 'dot(edges[0], ext[0]) + dot(edges[3], ext[0])'
 ```
+
+Compile a fixed-numerator Symbolica evaluator and use it:
+
+```bash
+python3 hybrid3d.py compile \
+  --orientation-json demo/box_hybrid.json \
+  --dot examples/box_pow3.dot \
+  --numerator-expr 'dot(edges[0], ext[0]) + dot(edges[3], ext[0])' \
+  --value-type real
+
+python3 hybrid3d.py evaluate \
+  --orientation-json demo/box_hybrid.json \
+  --dot examples/box_pow3.dot \
+  --use-symbolica \
+  --masses '{"m1":0.8,"m2":1.1,"m3":0.9,"m4":1.2}'
+
+python3 hybrid3d.py evaluate \
+  --orientation-json demo/box_hybrid.json \
+  --dot examples/box_pow3.dot \
+  --use-symbolica \
+  --profiling 10000 \
+  --masses '{"m1":0.8,"m2":1.1,"m3":0.9,"m4":1.2}'
+```
+
+The `compile` command stores an `evaluator` block in the JSON and writes a
+shared-library evaluator (`.so`) next to it by default.  The library path is
+stored relative to the JSON file.  The compiled evaluator is tied to the exact
+DOT graph, JSON structure, value type, and numerator expression.  If
+`SYMBOLICA_LICENSE` is set in the environment, Symbolica can use multicore
+optimization during compilation.
 
 Run diagnostics:
 
@@ -72,6 +114,11 @@ The exported schema is intentionally evaluator-complete.  Evaluation uses only:
 - and the serialized factorization trees.
 
 There is no hidden LTD/CFF backend call during evaluation.
+
+If the optional top-level `evaluator` block is present, it describes a compiled
+Symbolica evaluator for one fixed numerator.  The ordinary JSON semantics remain
+authoritative: `evaluate --use-symbolica` only changes how that same serialized
+orientation sum is numerically evaluated.
 
 Schema v6 uses this invariant:
 
@@ -156,6 +203,7 @@ The default suite includes:
 - CFF/LTD/hybrid structural checks,
 - repeated-propagator three-way diagnostics,
 - bounded-degree CFF/LTD checks for supported caps,
+- Symbolica compiled-evaluator checks when the optional package is installed,
 - a four-loop repeated-channel stress topology.
 
 The old five-loop ultimate basis alignment test is still present but slow.  Run

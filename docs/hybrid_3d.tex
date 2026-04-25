@@ -635,6 +635,10 @@ The implementation follows the formula in a small number of modules.
 \begin{itemize}[leftmargin=2em]
   \item \texttt{graph\_io.py} parses DOT graphs, detects repeated channels, and
         builds split-mass reference graphs.
+  \item \texttt{graph\_signatures.py} reconstructs DOT graphs from
+        \texttt{prop(q,m)} signature expressions.  The command-line wrapper
+        \texttt{graph\_from\_signatures} emits a graph that can immediately be
+        passed to the other commands.
   \item \texttt{orientation\_bundle.py} constructs pure LTD residues, pure CFF
         contraction forests, the confluent hybrid interpolation bundle, and the
         bounded-degree CFF finite-pole contact sectors.
@@ -648,7 +652,52 @@ The implementation follows the formula in a small number of modules.
   \item \texttt{pretty.py} renders the same JSON in audit form, showing
         numerator-only surfaces as \((e)\) or \((h)\), one row per denominator
         variant, and detailed substitution maps on request.
+  \item \texttt{symbolica\_eval.py} converts the same JSON expression into a
+        Symbolica evaluator for one fixed numerator, compiles it to a shared
+        library, and reloads that library for fast double-precision evaluation.
 \end{itemize}
+
+\section{Compiled Symbolica evaluators}
+
+The ordinary Python evaluator is the reference implementation of the schema.
+It uses arbitrary-precision arithmetic and calls the black-box numerator once
+per distinct JSON orientation.  For production numerical work one often wants a
+fixed numerator and a double-precision optimized evaluator.  The
+\texttt{compile} command provides this without changing the mathematical object
+being evaluated.
+
+Given a DOT graph, an orientation JSON file, and a numerator expression, the
+compiler performs the following steps.
+\begin{enumerate}[leftmargin=2em]
+  \item It builds a deterministic input vector containing all external
+        four-vector components, all loop spatial components, and one mass
+        input per internal edge.
+  \item It reconstructs the JSON expression symbolically.  On-shell energies
+        are represented through structured function calls such as
+        \texttt{OSE(qx,qy,qz,m)}; cached denominator and numerator-side
+        surfaces are represented by tagged calls such as \texttt{etaE(i)} and
+        \texttt{etaH(i)}; numerator four-vectors use tagged
+        \texttt{edgeQ}, \texttt{loopQ}, and \texttt{extQ} components.
+  \item It translates the fixed numerator expression into the same symbolic
+        component language.  The supported numerator syntax is the one used by
+        the tests: arithmetic, integer powers, component access
+        \texttt{edges[i][mu]}, \texttt{loops[i][mu]}, \texttt{ext[i][mu]},
+        and Minkowski products \texttt{dot(...,...)}.
+  \item It asks Symbolica to optimize the resulting expression and compile it
+        to a shared library.  The JSON file receives an \texttt{evaluator}
+        block containing the relative library path, function name, value type,
+        input layout, and graph/structure fingerprints.
+\end{enumerate}
+
+The compiled evaluator is therefore not a second backend.  It is an optimized
+realization of the already serialized expression.  At evaluation time
+\texttt{evaluate --use-symbolica} checks the fingerprints, loads the shared
+library with the recorded function name and input/output lengths, prepares the
+same real external and loop inputs used by the Python evaluator, and calls the
+compiled function.  Complex-valued compiled evaluators are allowed, but the
+current command-line input preparation still supplies real kinematics.  The
+\texttt{--profiling} option repeats one prepared input row into a Symbolica
+batch array and reports the total time and time per sample.
 
 \section{Bounded-degree CFF completion}
 
