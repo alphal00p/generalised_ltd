@@ -1,11 +1,13 @@
-import itertools, json, pathlib, math, os
+import itertools, json, pathlib, math, os, subprocess, sys
 from fractions import Fraction
 import pytest
 import mpmath as mp
+import pydot
 
-from hybrid3d_core.api import load_dot_graph, validate_graph, build_structure, evaluate_structure, compare_three_modes, run_test, run_cff_ltd_test
-from hybrid3d_core import graph_io as GIO
-from hybrid3d_core.orientation_bundle import (
+from src.api import load_dot_graph, validate_graph, build_structure, evaluate_structure, compare_three_modes, run_test, run_cff_ltd_test
+from src import graph_io as GIO
+from src import graph_signatures as SIG2G
+from src.orientation_bundle import (
     ExpressionBundle,
     LinearEnergyExpr,
     OrientationTerm,
@@ -14,8 +16,8 @@ from hybrid3d_core.orientation_bundle import (
     compute_internal_E_values,
     energy_divergence_report,
 )
-from hybrid3d_core.structure import minimal_structure_from_bundle, evaluate_minimal_bundle
-from hybrid3d_core.structure import numerator_from_expr
+from src.structure import minimal_structure_from_bundle, evaluate_minimal_bundle
+from src.structure import numerator_from_expr
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BOX_MASSES = {"m1":0.8,"m2":1.1,"m3":0.9,"m4":1.2}
@@ -95,6 +97,20 @@ ULTIMATE_CANONICAL_LOOP3 = (
 def dot(name):
     return load_dot_graph(str(ROOT/'examples'/name))
 
+def _graph_from_dot_text(text):
+    graphs = pydot.graph_from_dot_data(text)
+    assert graphs
+    return graphs[0]
+
+def _internal_signatures_and_masses(dot_graph):
+    parsed = GIO.parse_dot_graph(dot_graph)
+    return (
+        [edge.signature for edge in parsed.internal_edges],
+        [edge.mass_key or '0' for edge in parsed.internal_edges],
+        list(parsed.loop_names),
+        list(parsed.ext_names),
+    )
+
 def _solve_loop_basis(matrix, canonical_loop3):
     n = len(matrix)
     per_dim = []
@@ -156,6 +172,67 @@ def test_validate_all_examples_except_noisy():
 def test_noisy_rejected():
     assert validate_graph(dot('noisy_example.dot'))['ok'] is False
 
+def test_graph_from_signatures_cli_stdout_round_trips_prop_expression():
+    expr = 'prop(k1+p1,mA)*prop(k1+p1-q1,mB)*prop(k1-p2+q2,mC)*prop(k1,mD)'
+    expected_signatures, expected_loop_names, expected_ext_names, expected_masses = SIG2G.extract_signatures_and_masses_from_symbolica_expression(
+        expr,
+        loop_prefix='k',
+        external_prefixes=('p', 'q'),
+    )
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'graph_from_signatures',
+            '--signatures',
+            expr,
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    generated = _graph_from_dot_text(proc.stdout)
+    actual_signatures, actual_masses, actual_loop_names, actual_ext_names = _internal_signatures_and_masses(generated)
+
+    assert actual_signatures == expected_signatures
+    assert actual_masses == expected_masses
+    assert actual_loop_names == expected_loop_names
+    assert actual_ext_names == expected_ext_names
+    assert validate_graph(generated)['ok']
+
+def test_graph_from_signatures_cli_writes_vakint_dot_file(tmp_path):
+    expr = 'prop(k1+p1,0)*prop(k1+p1-q1,0)*prop(k1-p2+q2,0)*prop(k1-p2,0)*prop(k1,m1)'
+    out = tmp_path / 'from_signatures.dot'
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'graph_from_signatures',
+            '--signatures',
+            expr,
+            '--format',
+            'vakint',
+            '--dot-output',
+            str(out),
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    generated = load_dot_graph(str(out))
+    expected_signatures, expected_loop_names, expected_ext_names, expected_masses = SIG2G.extract_signatures_and_masses_from_symbolica_expression(
+        expr,
+        loop_prefix='k',
+        external_prefixes=('p', 'q'),
+    )
+    actual_signatures, actual_masses, actual_loop_names, actual_ext_names = _internal_signatures_and_masses(generated)
+
+    assert actual_signatures == expected_signatures
+    assert actual_masses == expected_masses
+    assert actual_loop_names == expected_loop_names
+    assert actual_ext_names == expected_ext_names
+    assert validate_graph(generated)['ok']
+
 def test_cff_box_surface_shifts_have_unit_external_coefficients_and_internal_ose_head():
     data = build_structure(dot('box_pow3.dot'), 'cff')
     assert data['family'] == 'cff'
@@ -211,12 +288,12 @@ def test_numerator_surface_cache_reuses_ids_and_marks_numerator_only():
     assert surfaces[two]['numerator_only'] is True
     assert data['orientations'][0]['num_surfaces'] == [shared, h_num, two]
 
-    ext4, loop3, masses = __import__('hybrid3d_core.api').api._random_default_inputs(d, 1337)
+    ext4, loop3, masses = __import__('src.api').api._random_default_inputs(d, 1337)
     E_vals = compute_internal_E_values(signatures, GIO.resolve_edge_masses(parsed, masses), loop3, ext4)
     value = evaluate_structure(data, d, ext4, loop3, '1', 80, masses)
     assert abs(value - 2 * (E_vals[0] - E_vals[1])) < mp.mpf('1e-70')
 
-    pretty = __import__('hybrid3d_core.api').api.pretty_structure(data, d, use_color=False)
+    pretty = __import__('src.api').api.pretty_structure(data, d, use_color=False)
     assert 'class' in pretty
     assert '(h)' in pretty
     assert '(e)' in pretty
@@ -260,7 +337,7 @@ def test_bounded_degree_hybrid_without_repeats_still_collapses_to_ltd():
 def test_bounded_degree_hybrid_repeated_matches_split_mass_ltd_limit():
     d = dot('box_pow3.dot')
     parsed = GIO.parse_dot_graph(d)
-    ext4, loop3, default_masses = __import__('hybrid3d_core.api').api._random_default_inputs(d, 1337)
+    ext4, loop3, default_masses = __import__('src.api').api._random_default_inputs(d, 1337)
     masses = {**default_masses, **BOX_MASSES}
     hybrid = build_structure(d, 'hybrid', energy_degree_bounds={3: 3})
     assert hybrid['backend'] == 'bounded_degree_hybrid_bundle'
@@ -284,7 +361,7 @@ def test_bounded_degree_hybrid_repeated_matches_split_mass_ltd_limit():
 def test_bounded_degree_hybrid_repeated_supports_quadratic_combinations():
     d = dot('proper_iterated_sandwiched_bubble.dot')
     parsed = GIO.parse_dot_graph(d)
-    ext4, loop3, default_masses = __import__('hybrid3d_core.api').api._random_default_inputs(d, 1337)
+    ext4, loop3, default_masses = __import__('src.api').api._random_default_inputs(d, 1337)
     masses = {**default_masses, **ITER_MASSES}
     bounds = {0: 2, 1: 2}
     numerator = 'edges[0][0]**2 * edges[1][0]**2'
@@ -344,7 +421,7 @@ def test_every_builder_emits_unique_edge_numerator_maps():
 def test_json_evaluator_calls_numerator_once_per_orientation():
     d = dot('box.dot')
     data = build_structure(d, 'cff', energy_degree_bounds={0: 2, 1: 2, 2: 2})
-    ext4, loop3, masses = __import__('hybrid3d_core.api').api._random_default_inputs(d, 1337)
+    ext4, loop3, masses = __import__('src.api').api._random_default_inputs(d, 1337)
     calls = {}
 
     def numerator(loop_four, external_four, edge_four=None, source_edge_four=None):
@@ -516,7 +593,7 @@ def test_three_way_report_runs_for_every_valid_example(name, numerator):
 def test_cff_hybrid_match_all_edge_dot_numerators_for_every_valid_example(name):
     d = dot(name)
     parsed = GIO.parse_dot_graph(d)
-    ext4, loop3, default_masses = __import__('hybrid3d_core.api').api._random_default_inputs(d, 1337)
+    ext4, loop3, default_masses = __import__('src.api').api._random_default_inputs(d, 1337)
     masses = {**default_masses, **ALL_MASSES}
     cff_data = build_structure(d, 'cff')
     hybrid_data = build_structure(d, 'hybrid')
@@ -542,7 +619,7 @@ def test_cff_hybrid_match_all_edge_dot_numerators_for_every_valid_example(name):
 def test_split_mass_pure_cff_matches_split_mass_pure_ltd_for_every_valid_example(name):
     d = dot(name)
     parsed = GIO.parse_dot_graph(d)
-    ext4, loop3, default_masses = __import__('hybrid3d_core.api').api._random_default_inputs(d, 1337)
+    ext4, loop3, default_masses = __import__('src.api').api._random_default_inputs(d, 1337)
     masses = {**default_masses, **ALL_MASSES}
     split_dot, _ = GIO.build_split_mass_dot(d)
     split_masses = GIO.build_split_mass_assignments(parsed, masses, '0.001')
@@ -562,7 +639,7 @@ def test_split_mass_pure_cff_matches_split_mass_pure_ltd_for_every_valid_example
 def test_split_mass_pure_cff_ltd_numerator_agreement_improves_with_precision():
     d = dot('box_pow3.dot')
     parsed = GIO.parse_dot_graph(d)
-    ext4, loop3, default_masses = __import__('hybrid3d_core.api').api._random_default_inputs(d, 1337)
+    ext4, loop3, default_masses = __import__('src.api').api._random_default_inputs(d, 1337)
     masses = {**default_masses, **ALL_MASSES}
     split_dot, _ = GIO.build_split_mass_dot(d)
     split_masses = GIO.build_split_mass_assignments(parsed, masses, '0.001')
@@ -580,7 +657,7 @@ def test_bounded_degree_cff_matches_ltd_for_quadratic_edge_energy():
     d = dot('box_pow3.dot')
     parsed = GIO.parse_dot_graph(d)
     split_dot, _ = GIO.build_split_mass_dot(d)
-    ext4, loop3, default_masses = __import__('hybrid3d_core.api').api._random_default_inputs(split_dot, 1337)
+    ext4, loop3, default_masses = __import__('src.api').api._random_default_inputs(split_dot, 1337)
     split_masses = GIO.build_split_mass_assignments(parsed, {**default_masses, **BOX_MASSES}, '0.001')
     cff_data = build_structure(split_dot, 'cff', energy_degree_bounds={0: 2})
     ltd_data = build_structure(split_dot, 'ltd')
@@ -603,7 +680,7 @@ def test_bounded_degree_cff_matches_ltd_for_multiloop_quadratic_combinations(nam
     d = dot(name)
     parsed = GIO.parse_dot_graph(d)
     split_dot, _ = GIO.build_split_mass_dot(d)
-    ext4, loop3, default_masses = __import__('hybrid3d_core.api').api._random_default_inputs(split_dot, 1337)
+    ext4, loop3, default_masses = __import__('src.api').api._random_default_inputs(split_dot, 1337)
     split_masses = GIO.build_split_mass_assignments(parsed, {**default_masses, **masses}, '0.001')
     cff_data = build_structure(split_dot, 'cff', energy_degree_bounds=bounds)
     ltd_data = build_structure(split_dot, 'ltd')
@@ -629,7 +706,7 @@ def test_bounded_degree_cff_matches_ltd_for_multiloop_squared_dot_numerators(nam
     d = dot(name)
     parsed = GIO.parse_dot_graph(d)
     split_dot, _ = GIO.build_split_mass_dot(d)
-    ext4, loop3, default_masses = __import__('hybrid3d_core.api').api._random_default_inputs(split_dot, 1337)
+    ext4, loop3, default_masses = __import__('src.api').api._random_default_inputs(split_dot, 1337)
     split_masses = GIO.build_split_mass_assignments(parsed, {**default_masses, **masses}, '0.001')
     cff_data = build_structure(split_dot, 'cff', energy_degree_bounds=bounds)
     ltd_data = build_structure(split_dot, 'ltd')
@@ -643,7 +720,7 @@ def test_bounded_degree_cff_matches_ltd_for_multiloop_squared_dot_numerators(nam
 
 def test_normal_box_bounded_degree_cff_matches_ltd_for_all_convergent_edge_power_bounds():
     d = dot('box.dot')
-    ext4, loop3, masses = __import__('hybrid3d_core.api').api._random_default_inputs(d, 1337)
+    ext4, loop3, masses = __import__('src.api').api._random_default_inputs(d, 1337)
     ltd_data = build_structure(d, 'ltd')
     # Four one-loop propagators give denominator degree 8 in k^0.  The
     # one-dimensional contour is convergent for total numerator degree <= 6.
@@ -693,7 +770,7 @@ def test_bounded_degree_cff_repairs_known_quadratic_cff_ltd_mismatch():
     d = dot('box_pow3.dot')
     parsed = GIO.parse_dot_graph(d)
     split_dot, _ = GIO.build_split_mass_dot(d)
-    ext4, loop3, default_masses = __import__('hybrid3d_core.api').api._random_default_inputs(split_dot, 1337)
+    ext4, loop3, default_masses = __import__('src.api').api._random_default_inputs(split_dot, 1337)
     split_masses = GIO.build_split_mass_assignments(parsed, {**default_masses, **BOX_MASSES}, '0.001')
     numerator = 'edges[0][0]**2'
     ordinary = evaluate_structure(build_structure(split_dot, 'cff'), split_dot, ext4, loop3, numerator, 80, split_masses)
@@ -704,7 +781,7 @@ def test_bounded_degree_cff_repairs_known_quadratic_cff_ltd_mismatch():
 
 def test_bounded_degree_cff_on_repeated_graph_uses_finite_confluent_limit():
     d = dot('box_pow3.dot')
-    ext4, loop3, default_masses = __import__('hybrid3d_core.api').api._random_default_inputs(d, 1337)
+    ext4, loop3, default_masses = __import__('src.api').api._random_default_inputs(d, 1337)
     masses = {**default_masses, **BOX_MASSES}
     bounds = {3: 2}
     numerator = 'edges[3][0]**2'
@@ -743,7 +820,7 @@ def test_cff_ltd_test_helper_uses_bounded_degree_cff():
     d = dot('box_pow3.dot')
     parsed = GIO.parse_dot_graph(d)
     split_dot, _ = GIO.build_split_mass_dot(d)
-    ext4, loop3, default_masses = __import__('hybrid3d_core.api').api._random_default_inputs(split_dot, 1337)
+    ext4, loop3, default_masses = __import__('src.api').api._random_default_inputs(split_dot, 1337)
     split_masses = GIO.build_split_mass_assignments(parsed, {**default_masses, **BOX_MASSES}, '0.001')
     rep = run_cff_ltd_test(
         split_dot,

@@ -5,6 +5,7 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .coverage
+*.profraw
 htmlcov/
 
 # Editor and OS noise
@@ -38,3 +39,4 @@ demo/
 tmp/
 build/
 dist/
+OLD_CODE/
