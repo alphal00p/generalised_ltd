@@ -596,21 +596,59 @@ The needed ingredients are represented as follows.
         repeated entries in the existing \texttt{half\_edges} list.
   \item Per-denominator rational prefactors from the expanded confluent weights
         are stored in the existing \texttt{pref} field.
-  \item Orientation labels that distinguish \(B,\sigma,\theta,\mu\), not just edge signs.
-  \item Explicit physical-chain and repeated-copy sign metadata so tests can
-        verify the numerator replacement rule.
-  \item A \texttt{variants} list when several denominator pieces share one
-        numerator energy map.
+  \item Known numerator-side energy factors are stored as repeated surface-cache
+        references in \texttt{num\_surfaces}.  They multiply the sampled
+        numerator instead of dividing the denominator.
+  \item The surface cache is shared by denominator and numerator factors.  If a
+        numerator factor uses a linear form already present in a denominator
+        tree, the same surface id is reused.  A surface-cache entry carries
+        \texttt{numerator\_only=true} precisely when it appears only in
+        \texttt{num\_surfaces} and never in a denominator tree.
+  \item One JSON orientation per distinct numerator energy map.  The
+        \texttt{orient\_label} is a compact edge-map signature: \(+\) and \(-\)
+        mean \(q_e^0=\pm\omega_e\), \(0\) means the numerator is sampled at
+        \(q_e^0=0\), and \(x\) means a non-trivial linear energy map shown in
+        the detailed table.
+  \item A \texttt{variants} list for all denominator pieces sharing that one
+        numerator call.  Physical origin labels such as CFF, LTD, pinch sectors,
+        basis choices, \(\beta\), and \(\gamma\) live on variants rather than in
+        the orientation identity.
+  \item Explicit physical-chain and repeated-copy sign metadata on the variant
+        entries so tests can verify the numerator replacement rule.
 \end{itemize}
 
 For the currently supported numerator class, namely numerators affine in the
 edge-momentum-representation energy variables, numerator derivatives appearing
 in the derivation are replaced by exact physical on-shell interpolation weights.
-Each distinct sample point is exported as an ordinary orientation with one
-concrete \texttt{loop\_q0}/\texttt{edge\_q0} substitution map.  The denominator
-derivative part is exported as a sum of ordinary surface products with repeated
-surface ids, possibly under \texttt{variants}.  Thus the same evaluator consumes
-pure CFF, pure LTD, and hybrid CFF JSON.
+Each distinct edge-energy sample point is exported as one orientation with one
+concrete \texttt{edge\_q0} substitution map.  The \texttt{loop\_q0} map is kept
+as derived auxiliary information for diagnostics and for the legacy
+\texttt{loops[...]} numerator hook, but the EMR numerator call is identified by
+\texttt{edge\_q0}.  The denominator derivative part is exported as a sum of
+ordinary surface products with repeated surface ids under \texttt{variants}.
+Thus the same evaluator consumes pure CFF, pure LTD, and hybrid CFF JSON, and
+the evaluator calls the black-box numerator once per orientation.
+
+\section{Python implementation map}
+
+The implementation follows the formula in a small number of modules.
+\begin{itemize}[leftmargin=2em]
+  \item \texttt{graph\_io.py} parses DOT graphs, detects repeated channels, and
+        builds split-mass reference graphs.
+  \item \texttt{orientation\_bundle.py} constructs pure LTD residues, pure CFF
+        contraction forests, the confluent hybrid interpolation bundle, and the
+        bounded-degree CFF finite-pole contact sectors.
+  \item \texttt{structure.py} serializes bundles to schema~6 JSON.  This is
+        where all terms with identical \texttt{edge\_q0} maps are merged into
+        one orientation and their denominator contributions become variants.
+  \item \texttt{structure.py} also contains the JSON evaluator.  It reads only
+        the serialized surface cache, half-edge factors, numerator-surface
+        factors, substitution maps, and factorization trees; no hidden CFF or
+        LTD backend is consulted during evaluation.
+  \item \texttt{pretty.py} renders the same JSON in audit form, showing
+        numerator-only surfaces as \((e)\) or \((h)\), one row per denominator
+        variant, and detailed substitution maps on request.
+\end{itemize}
 
 \section{Bounded-degree CFF completion}
 
@@ -632,21 +670,212 @@ The bounded-degree CFF completion is only emitted if every \(\delta_i<-1\).
 Otherwise the command fails, because an infinity arc could contribute and no
 finite black-box sample formula is determined by the CFF pole data alone.
 
-When the bounds are convergent but exceed the ordinary affine-safe class, the
-JSON emitted for \texttt{family=cff} is a finite-pole completion:
+The recombination problem can be phrased algebraically.  For each denominator
+channel define
 \[
-  \text{ordinary CFF}
-  +
-  \bigl(\text{finite LTD pole sum}-\text{ordinary CFF}\bigr).
+  D_e=(q_e^0)^2-\omega_e^2 .
 \]
-The second parenthesis is stored explicitly as contact/infinity-correction
-orientations, not as evaluator-side hidden logic.  Thus the same JSON evaluator
-still performs only the standard operation: evaluate the black-box numerator at
-the emitted energy map and multiply by the emitted prefactor, half-edge factors,
-and surface tree.  This is deliberately conservative.  It proves that a
-bounded, UV-convergent black-box numerator can be handled without rerouting the
-input topology, while leaving the harder task of recombining the contact sector
-into a compact purely causal CFF normal form for later work.
+Polynomial division by the finite-pole ideal generated by the \(D_e\)'s gives a
+recursive decomposition
+\[
+  \frac{N}{\prod_e D_e}
+  =
+  \frac{R_e N}{D_e\prod_{f\ne e}D_f}
+  +
+  \frac{C_e N}{\prod_{f\ne e}D_f},
+  \qquad
+  C_eN=\frac{N-R_eN}{D_e},
+  \label{eq:finite-pole-division}
+\]
+where \(R_eN\) is the affine remainder in \(q_e^0\).  The first term keeps edge
+\(e\) and is ordinary CFF-safe in that variable.  The second term cancels the
+propagator and is evaluated on the graph obtained by contracting edge \(e\).
+Iterating \eqref{eq:finite-pole-division} gives a pinch forest: each forest node
+is an ordinary CFF expression on a contracted subgraph.  Hence all denominator
+surfaces can in principle be regular CFF \(E\)-surfaces; no LTD \(H\)-surface is
+intrinsic to the finite-pole completion.
+
+For the special but important bound \(d_e\le2\), this division is particularly
+simple.  The quotient \(C_eN\) is independent of \(q_e^0\) and can be reconstructed
+from black-box samples by
+\[
+  C_eN
+  =
+  \frac{N(q_e^0=+\omega_e)-2N(q_e^0=0)+N(q_e^0=-\omega_e)}
+       {2\omega_e^2}.
+  \label{eq:quadratic-contact}
+\]
+For several quadratic edges the contact operators commute in the formal
+polynomial division, so a contact sector for a pinched set \(S\) carries the
+tensor product of the three-point weights
+\[
+  q_e^0=+\omega_e,\;0,\;-\omega_e,
+  \qquad
+  w_e=1,\;-2,\;1,
+  \qquad e\in S,
+\]
+together with one factor \(1/(2\omega_e^2)\) per pinched edge.  In the existing
+JSON this can be represented without new evaluator semantics by adding two
+\texttt{half\_edges} entries for each pinched edge and multiplying the rational
+\texttt{pref} by \(2w_e\).  The denominator tree itself is the ordinary CFF tree
+of the contracted subgraph, lifted back to the original edge labels.  Terminal
+one-denominator sectors are kept in the same JSON language by inserting a cached
+unit \(E\)-surface; the non-trivial factor is then only the half-edge Jacobian and
+the numerator sample.  This is the first fully causal bounded-degree completion
+implemented in the prototype.  The current implementation enables the one-loop
+non-repeated subcase with arbitrary numbers of quadratic-or-lower edge bounds.
+Multiloop pinches require a more careful choice of contracted CFF graph and
+loop-energy basis before this lifting is safe, and higher-order contacts require
+the numerator-side surface weights described below.
+
+The same division also explains what is required for \(d_e>2\).  Let
+\(d=d_e\), choose \(d-1\) non-pole interpolation nodes
+\[
+  a_j\in\mathbb Z,\qquad a_j\ne\pm1,
+\]
+and let \(L_j(x)\) be the Lagrange basis in \(x=q_e^0/\omega_e\).  Then the
+contact quotient can be reconstructed as
+\[
+  C_eN(q_e^0)
+  =
+  \sum_j
+  \frac{L_j(q_e^0/\omega_e)}
+       {(a_j^2-1)\omega_e^2}
+  \left[
+    N(a_j\omega_e)
+    -\frac{a_j+1}{2}N(+\omega_e)
+    -\frac{1-a_j}{2}N(-\omega_e)
+  \right].
+  \label{eq:higher-contact-interpolation}
+\]
+For a cubic term, for example,
+\[
+  \frac{(q_e^0)^3-R_e(q_e^0)^3}{D_e}=q_e^0 ,
+\]
+so an isolated cubic contact produces only a known affine numerator-side factor,
+which the current CFF lift can handle.  For quartic and for mixed cubic sectors
+the weights become quadratic or higher polynomials in the remaining edge
+energies.  Those known factors must be reduced recursively by the same
+finite-pole division before ordinary CFF is valid on the contracted graph.
+
+The implementation therefore deliberately emits only the cases that are
+currently causal and tested:
+\begin{itemize}[leftmargin=2em]
+  \item one-loop non-repeated graphs with arbitrary quadratic-or-lower caps;
+  \item isolated single-edge cubic caps;
+  \item no LTD-contact fallback.
+\end{itemize}
+Unsupported higher contacts, multiloop pinches, and repeated-channel bounded
+hybrid sectors raise an implementation error instead of serializing
+\(\CFF+(\LTD-\CFF)\).  This is intentional: that fallback is a useful numerical
+identity but not the desired E-surface-only CFF representation.
+
+\subsection{Status of the higher-power lift}
+
+The obstruction to arbitrary capped EMR energy powers is not the one-dimensional
+finite-pole interpolation itself.  The interpolation formula
+\eqref{eq:higher-contact-interpolation} exactly reconstructs the quotient by
+\((q_e^0)^2-\omega_e^2\) for a bounded polynomial in one edge energy.  The
+difficulty is what the quotient contains after the edge has been pinched.  For
+degree \(d_e>2\), the contact term carries known polynomial factors in the
+remaining edge-energy variables.  Those factors are not black-box numerator
+samples, but they are still numerator-side energy dependence.  An ordinary CFF
+tree on the pinched graph is valid only after these known factors have also been
+reduced by the same finite-pole division whenever they exceed the affine-safe
+class.
+
+Consequently, a general capped-power completion requires an internal sector
+algebra rather than a single extra CFF branch.  Each sector must track
+\begin{itemize}[leftmargin=2em]
+  \item the black-box numerator sample map;
+  \item the known numerator-side polynomial weight, expressed in linear energy
+        forms and cached surfaces;
+  \item the denominator graph or minor on which the next CFF tree is built;
+  \item the remaining degree bounds and the loop-energy UV degree of the sector;
+  \item the merge key used to combine all denominator variants with the same
+        numerator energy map.
+\end{itemize}
+Only after this recursive reduction terminates can the sector be serialized as
+ordinary JSON using denominator \(E\)-surfaces and numerator-side surface
+factors.  This is the path for arbitrary caps in pure CFF.  The same sector
+algebra is also the natural implementation layer for the hybrid formula, where
+finite-pole contacts must be combined with the confluent repeated-channel
+residue weights.
+
+The quadratic case \(d_e\le2\) is special and substantially easier.  The quotient
+\eqref{eq:quadratic-contact} is independent of \(q_e^0\), so no known
+polynomial factor is produced by a quadratic contact.  Arbitrary combinations of
+quadratic-powered edges should therefore be attainable without the recursive
+polynomial-weight machinery.  What remains is the correct multiloop contact
+operation: after several edges are pinched, the CFF denominator tree must be
+built on the right causal minor, with a loop-energy basis for which the finite
+part has no residue at infinity.  Naive contraction and naive deletion are not
+equivalent to this operation in general.  This is why the current public builder
+keeps the multiloop guard even though the one-loop quadratic formula is already
+implemented and tested.
+
+The intended implementation order is therefore:
+\begin{enumerate}[leftmargin=2em]
+  \item complete the pure-CFF quadratic contact lift for arbitrary convergent
+        combinations of quadratic edges, validating every sector directly
+        against LTD;
+  \item extend the same quadratic contact operator to repeated-channel hybrid
+        sectors, preserving the collapse to LTD when no repeated propagator is
+        present;
+  \item add the recursive known-polynomial sector algebra needed for cubic,
+        quartic, and mixed higher-power caps.
+\end{enumerate}
+
+\subsection{Higher powers on repeated channels}
+
+The same numerator-surface mechanism should also extend the repeated-channel
+part of the hybrid master formula.  Let a repeated group \(g\) have collapsed
+denominator power \(\nu_g\) and channel energy \(Q_g^0\).  If the numerator has
+a capped polynomial dependence on \(Q_g^0\), divide it recursively by
+\[
+  D_g=(Q_g^0)^2-\omega_g^2 .
+\]
+Equivalently,
+\[
+  N
+  =
+  R_0
+  +D_g R_1
+  +D_g^2 R_2
+  +\cdots ,
+  \qquad
+  \deg_{Q_g^0}R_r\le1 .
+\]
+Inserted against \(D_g^{-\nu_g}\), the term \(D_g^rR_r\) reduces the repeated
+power to \(D_g^{-(\nu_g-r)}\) while \(r<\nu_g\).  If all copies are cancelled,
+the corresponding channel is pinched out of the collapsed graph.  Thus high
+numerator powers on a repeated channel become a finite sum of lower-power
+hybrid sectors plus known numerator-side energy factors.
+
+This is exactly what is needed to preserve the black-box numerator contract.
+The confluent residue of a cut repeated channel differentiates only the known
+factors generated by the division and the known causal denominators.  The
+remainder \(R_r\), being affine in the active channel energy, is reconstructed
+from finitely many black-box samples as in the current hybrid interpolation.
+For multivariate EMR numerators the division is performed in the ideal generated
+by the active channel denominators \(D_g\).  The quotient weights can contain
+mixed-sign linear energy forms; these are acceptable as numerator-only
+\(H\)-class surface-cache entries because they are polynomial multipliers, not
+poles.
+
+The expected fully causal high-degree hybrid form is therefore
+\[
+  \sum_{\text{pinch forests }F}
+  \CFF_{\rm hybrid}\!\left(G/F,\{\nu_g-r_g\}\right)
+  \times
+  \prod_{a\in A_F} S_a ,
+\]
+where every denominator tree is built from ordinary CFF \(E\)-surfaces of the
+appropriate collapsed or pinched graph, and each \(S_a\) is a cached
+numerator-side surface id.  The remaining implementation work is mechanical but
+nontrivial: choose a deterministic multivariate division order, emit unit
+denominator sectors when all powers of a channel cancel, and control the growth
+of interpolation samples from the user-provided degree caps.
 
 \section{Testing requirements}
 

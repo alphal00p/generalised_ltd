@@ -68,19 +68,62 @@ def _json_pref(value):
         return str(value)
     return frac.numerator if frac.denominator == 1 else str(value)
 
-def _physical_orientation_label(label: str) -> str:
-    parts = str(label).split('|')
-    if not parts:
-        return str(label)
-    basis = next((part for part in parts[1:] if part.startswith('B')), None)
-    sample = str(label).split(':')[-1] if ':' in str(label) else parts[-1]
-    if basis:
-        return f'{parts[0]}|{basis}|{sample}'
-    return f'{parts[0]}|{sample}'
+def _expr_is_zero(expr: Dict[str, Any]) -> bool:
+    return not expr.get('i') and not expr.get('x') and str(expr.get('c', '0')) in {'0', '0.0'}
+
+def _edge_map_symbol(edge_id: int, expr: Dict[str, Any]) -> str:
+    if _expr_is_zero(expr):
+        return '0'
+    if not expr.get('x') and str(expr.get('c', '0')) in {'0', '0.0'}:
+        terms = [(int(a), int(b)) for a, b in expr.get('i', [])]
+        if terms == [(int(edge_id), 1)]:
+            return '+'
+        if terms == [(int(edge_id), -1)]:
+            return '-'
+    return 'x'
+
+def _orientation_label_from_map(edge_q0: Sequence[Dict[str, Any]]) -> str:
+    return ''.join(_edge_map_symbol(edge_id, expr) for edge_id, expr in enumerate(edge_q0))
+
+def _edge_signs_from_map(edge_q0: Sequence[Dict[str, Any]]) -> List[int]:
+    out: List[int] = []
+    for edge_id, expr in enumerate(edge_q0):
+        sym = _edge_map_symbol(edge_id, expr)
+        out.append(1 if sym == '+' else -1 if sym == '-' else 0)
+    return out
+
+def _variant_origin_label(label: str, meta: Dict[str, Any]) -> str:
+    label_s = str(label)
+    if label_s.startswith('cff|'):
+        return 'cff'
+    if label_s.startswith('pinch['):
+        return label_s.split('|cff=', 1)[0]
+    source = str(meta.get('source', ''))
+    if source == 'acyclic_orientation':
+        return 'cff'
+    if source == 'canonical_ltd_residue':
+        return 'ltd'
+    if source == 'hybrid_confluent_ltd_interpolation':
+        parts = label_s.split('|')
+        return '|'.join(parts[1:]) if len(parts) > 1 else 'hybrid'
+    return source or label_s
 
 
 def minimal_structure_from_bundle(bundle, parsed, backend: str, family: str, validation: dict):
-    surfaces = [{'id': s.surface_id, 'k': s.kind, 'e': _linear_to_min(s.expr)} for s in bundle.surface_cache]
+    denominator_surface_ids = set()
+    numerator_surface_ids = set()
+    for term in bundle.terms:
+        denominator_surface_ids.update(int(sid) for sid in term.surface_chain)
+        numerator_surface_ids.update(int(sid) for sid in term.numerator_surface_chain)
+    surfaces = [
+        {
+            'id': s.surface_id,
+            'k': s.kind,
+            'e': _linear_to_min(s.expr),
+            'numerator_only': int(s.surface_id) in numerator_surface_ids and int(s.surface_id) not in denominator_surface_ids,
+        }
+        for s in bundle.surface_cache
+    ]
     by_orient = {}
     tree_cache: Dict[Tuple[Tuple[int, ...], ...], Tuple[int, Dict[str, Any]]] = {}
     def intern_tree(chains: List[Tuple[int, ...]]):
@@ -95,50 +138,68 @@ def minimal_structure_from_bundle(bundle, parsed, backend: str, family: str, val
     for t in bundle.terms:
         loop_q0 = [_linear_to_min(x) for x in t.loop_energy_exprs]
         edge_q0 = [_linear_to_min(x) for x in t.edge_energy_exprs]
-        map_key = (tuple(_expr_key(x) for x in loop_q0), tuple(_expr_key(x) for x in edge_q0))
-        if t.meta.get('merge_by_numerator_map'):
-            key = ('numap', map_key)
-        else:
-            key = (
-                'term',
-                str(t.orientation_id),
-                tuple(int(x) for x in t.edge_orientations),
-                str(t.prefactor_sign),
-                tuple(int(x) for x in t.prefactor_half_edges),
-                map_key,
-            )
+        map_key = tuple(_expr_key(x) for x in edge_q0)
+        key = ('numap', map_key)
+        orient_label = _orientation_label_from_map(edge_q0)
         entry = by_orient.setdefault(key, {
             'id': None,
-            'orient_label': _physical_orientation_label(str(t.orientation_id)) if t.meta.get('merge_by_numerator_map') else str(t.orientation_id),
-            'edge_signs': list(t.edge_orientations),
+            'orient_label': orient_label,
+            'edge_signs': _edge_signs_from_map(edge_q0),
+            'energy_map_symbols': list(orient_label),
             'loop_q0': loop_q0,
             'edge_q0': edge_q0,
             'terms': {},
             'meta': dict(t.meta),
-            'merge_by_numerator_map': bool(t.meta.get('merge_by_numerator_map')),
             'merged_orientation_labels': [],
         })
         if str(t.orientation_id) not in entry['merged_orientation_labels']:
             entry['merged_orientation_labels'].append(str(t.orientation_id))
-        term_key = (tuple(int(x) for x in t.prefactor_half_edges), tuple(int(x) for x in t.surface_chain))
-        entry['terms'][term_key] = entry['terms'].get(term_key, Fraction(0)) + Fraction(str(t.prefactor_sign))
+        term_key = (
+            _variant_origin_label(str(t.orientation_id), t.meta),
+            tuple(int(x) for x in t.prefactor_half_edges),
+            tuple(int(x) for x in t.numerator_surface_chain),
+            tuple(int(x) for x in t.surface_chain),
+        )
+        item = entry['terms'].setdefault(term_key, {
+            'pref': Fraction(0),
+            'meta': dict(t.meta),
+            'orientation_labels': [],
+        })
+        item['pref'] += Fraction(str(t.prefactor_sign))
+        if str(t.orientation_id) not in item['orientation_labels']:
+            item['orientation_labels'].append(str(t.orientation_id))
     orientations = []
     for idx, entry in enumerate(by_orient.values()):
-        variant_chains: Dict[Tuple[Fraction, Tuple[int, ...]], List[Tuple[int, ...]]] = {}
-        for (half_edges, chain), pref in entry.pop('terms').items():
+        variant_chains: Dict[Tuple[str, Fraction, Tuple[int, ...], Tuple[int, ...]], Dict[str, Any]] = {}
+        for (origin, half_edges, num_surfaces, chain), item in entry.pop('terms').items():
+            pref = item['pref']
             if not pref:
                 continue
-            variant_chains.setdefault((pref, half_edges), []).append(chain)
+            key = (origin, pref, half_edges, num_surfaces)
+            slot = variant_chains.setdefault(key, {
+                'chains': [],
+                'meta': dict(item['meta']),
+                'orientation_labels': [],
+            })
+            slot['chains'].append(chain)
+            for lbl in item['orientation_labels']:
+                if lbl not in slot['orientation_labels']:
+                    slot['orientation_labels'].append(lbl)
         variants = []
-        for (pref, half_edges), chains in variant_chains.items():
+        for (origin, pref, half_edges, num_surfaces), item in variant_chains.items():
+            chains = item['chains']
             denom_id, tree = intern_tree(chains)
             variants.append({
                 'denom_id': denom_id,
+                'origin': origin,
                 'pref': _json_pref(pref),
                 'half_edges': list(half_edges),
+                'num_surfaces': list(num_surfaces),
                 'loop_q0': entry['loop_q0'],
                 'edge_q0': entry['edge_q0'],
                 'tree': tree,
+                'meta': item['meta'],
+                'orientation_labels': item['orientation_labels'],
             })
         if not variants:
             continue
@@ -149,18 +210,36 @@ def minimal_structure_from_bundle(bundle, parsed, backend: str, family: str, val
             'edge_signs': entry['edge_signs'],
             'pref': first['pref'],
             'half_edges': first['half_edges'],
+            'num_surfaces': first['num_surfaces'],
             'loop_q0': entry['loop_q0'],
             'edge_q0': entry['edge_q0'],
             'tree': first['tree'],
             'meta': entry['meta'],
+            'energy_map_symbols': entry['energy_map_symbols'],
+            'variants': variants,
         }
-        if entry['merge_by_numerator_map']:
-            out['meta']['merged_orientation_count'] = len(entry['merged_orientation_labels'])
-            out['meta']['variant_count'] = len(variants)
-            out['variants'] = variants
+        out['meta']['merged_orientation_count'] = len(entry['merged_orientation_labels'])
+        out['meta']['variant_count'] = len(variants)
+        out['meta']['merged_orientation_labels'] = list(entry['merged_orientation_labels'])
         orientations.append(out)
+
+    emitted_denominator_surface_ids = set()
+    emitted_numerator_surface_ids = set()
+    for orient in orientations:
+        variants = orient.get('variants') or [{
+            'num_surfaces': orient.get('num_surfaces', []),
+            'tree': orient['tree'],
+        }]
+        for var in variants:
+            emitted_numerator_surface_ids.update(int(sid) for sid in var.get('num_surfaces', []))
+            for node in var['tree'].get('nodes', []):
+                emitted_denominator_surface_ids.update(int(sid) for sid in node.get('surfaces', []))
+    for surface in surfaces:
+        sid = int(surface['id'])
+        surface['numerator_only'] = sid in emitted_numerator_surface_ids and sid not in emitted_denominator_surface_ids
+
     return {
-        'schema_version': 4,
+        'schema_version': 6,
         'family': family,
         'backend': backend,
         'graph': {
@@ -225,6 +304,7 @@ def evaluate_minimal_bundle(data, dot, ext4, loop3, numerator_fn, mass_map=None,
             variants = [{
                 'pref': orient['pref'],
                 'half_edges': orient['half_edges'],
+                'num_surfaces': orient.get('num_surfaces', []),
                 'loop_q0': orient['loop_q0'],
                 'edge_q0': orient['edge_q0'],
                 'tree': orient['tree'],
@@ -232,6 +312,7 @@ def evaluate_minimal_bundle(data, dot, ext4, loop3, numerator_fn, mass_map=None,
         for var in variants:
             pref = mp.mpf(var['pref'])
             half_edges = tuple(int(e) for e in var['half_edges'])
+            num_surface_ids = tuple(int(sid) for sid in var.get('num_surfaces', []))
             denom_key = (var.get('denom_id', id(var['tree'])), half_edges)
             denom = denominator_cache.get(denom_key)
             if denom is None:
@@ -243,6 +324,9 @@ def evaluate_minimal_bundle(data, dot, ext4, loop3, numerator_fn, mass_map=None,
                     treesum += _sum_tree(var['tree'], r, data['surfaces'], E_vals, OSE_vals)
                 denom *= treesum
                 denominator_cache[denom_key] = denom
+            num_surface_factor = mp.mpf(1)
+            for sid in num_surface_ids:
+                num_surface_factor *= _min_eval(data['surfaces'][int(sid)]['e'], E_vals, OSE_vals)
             num_key = (
                 tuple(_expr_key(x) for x in var['loop_q0']),
                 tuple(_expr_key(x) for x in var['edge_q0']),
@@ -254,5 +338,5 @@ def evaluate_minimal_bundle(data, dot, ext4, loop3, numerator_fn, mass_map=None,
                 edge_four = compute_edge_four_vectors(signatures, masses, loop3, ext4_mp, var['edge_q0'], parsed, ose_override=ose_override)
                 num = mp.mpf(numerator_fn(loop_four, ext4_mp, edge_four, edge_four))
                 numerator_cache[num_key] = num
-            total += pref * num * denom
+            total += pref * num_surface_factor * num * denom
     return total

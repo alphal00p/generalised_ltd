@@ -1,47 +1,44 @@
-# hybrid3d DOT-only prototype
+# hybrid3d DOT prototype
 
-This package is a DOT-graph-first prototype for inspecting and numerically evaluating LTD, CFF and hybrid LTD/CFF orientation structures for graphs with repeated propagator channels.
+`hybrid3d.py` builds, prints, exports, and evaluates JSON representations for
+LTD, pure CFF, and the current hybrid LTD/CFF construction for repeated
+propagator channels.
 
-## Graph convention
+Raised propagators are encoded as repeated internal DOT edges with the same
+momentum signature and mass key.  The DOT `pow` attribute is intentionally
+rejected; use explicit repeated edges instead.
 
-Internal propagators are directed DOT edges carrying a linear momentum label such as `k1+p1` and an optional symbolic mass key:
-
-```dot
-v0 -> v1 [label="k1+p1", mass="mA"];
-```
-
-If `mass` is absent the edge is massless.  Equal symbolic mass keys indicate equal masses at evaluation time.  Numeric masses are supplied separately with `--masses`.  The edge attribute `pow` is not supported; raised propagators must be represented by repeated distinct edges.
-
-Repeated propagators must not be encoded as duplicate parallel edges.  They should be serialized through intermediate vertices or through the sandwiched bubble structure described in the examples.
-
-## Commands
+## CLI
 
 Validate a graph:
 
 ```bash
-python hybrid3d.py validate --dot examples/box_pow3.dot
+python3 hybrid3d.py validate --dot examples/box_pow3.dot
 ```
 
-Build and inspect the hybrid structure:
+Build a structure:
 
 ```bash
-python hybrid3d.py build --family hybrid --dot examples/box_pow3.dot --pretty
-python hybrid3d.py build --family hybrid --dot examples/box_pow3.dot --pretty --show-details-for-orientation '+-----|coupled'
+python3 hybrid3d.py build --family ltd --dot examples/box.dot --pretty
+python3 hybrid3d.py build --family cff --dot examples/box.dot --pretty
+python3 hybrid3d.py build --family hybrid --dot examples/box_pow3.dot --pretty
 ```
 
-The orientation label before `|` is the edge-orientation string on the original internal edges.  For repeated-channel graphs the marker after `|` is `coupled`, indicating that the repeated sector is evaluated with the general coupled CFF-cone kernel.
-
-Export JSON:
+Inspect one orientation in detail:
 
 ```bash
-mkdir -p demo
-python hybrid3d.py build --family hybrid --dot examples/box_pow3.dot --json-out demo/box_hybrid.json
+python3 hybrid3d.py build --family cff --dot examples/box.dot \
+  --energy-degree-bounds 0:2,1:2,2:2 \
+  --pretty --show-details-for-orientation --++ --no-color
 ```
 
-Evaluate from JSON:
+Export and evaluate JSON:
 
 ```bash
-python hybrid3d.py evaluate \
+python3 hybrid3d.py build --family hybrid --dot examples/box_pow3.dot \
+  --json-out demo/box_hybrid.json
+
+python3 hybrid3d.py evaluate \
   --orientation-json demo/box_hybrid.json \
   --dot examples/box_pow3.dot \
   --external '[[0.3,0.1,-0.2,0.05],[-0.15,0.2,0.05,-0.1],[0.25,-0.1,0.15,0.07]]' \
@@ -50,70 +47,111 @@ python hybrid3d.py evaluate \
   --numerator-expr 'dot(edges[0], ext[0]) + dot(edges[3], ext[0])'
 ```
 
-Run the diagnostic three-way report:
+Run diagnostics:
 
 ```bash
-python hybrid3d.py test --dot examples/proper_iterated_sandwiched_bubble.dot \
+python3 hybrid3d.py test --dot examples/proper_iterated_sandwiched_bubble.dot \
   --masses '{"mA":0.8,"mB":0.9,"mC":1.1,"mD":0.75,"mE":1.0,"mF":0.6}' \
   --numerator-expr 'dot(edges[1], ext[0]) + dot(edges[4], ext[0])'
+
+python3 hybrid3d.py test-cff-ltd --dot examples/box.dot \
+  --energy-degree-bounds 0:2,1:2,2:2 \
+  --numerator-expr 'edges[0][0]**2 * edges[1][0]**2 * edges[2][0]**2' \
+  --dps 80
 ```
 
-## JSON structure
+## JSON Semantics
 
-The JSON is intentionally DOT-dependent.  It stores:
+The exported schema is intentionally evaluator-complete.  Evaluation uses only:
 
-- the family and backend,
-- the graph summary,
-- a surface cache with compact linear expressions in `E[i]` and `OSE[a]`,
-- one entry per orientation,
-- the per-orientation loop and edge energy substitutions.
+- the DOT graph,
+- the JSON surface cache,
+- the orientation energy maps,
+- half-edge factors,
+- numerator-side surface factors,
+- and the serialized factorization trees.
 
-`OSE[a]` is now always an external basis-energy id, not an external half-edge id.  Therefore a box with three external basis vectors only displays `OSE[0]`, `OSE[1]` and `OSE[2]`.
+There is no hidden LTD/CFF backend call during evaluation.
 
-## Pretty output
+Schema v6 uses this invariant:
 
-The pretty output is meant for auditing.  By default it shows only the graph summary, surface cache and orientation summary.  Use `--show-details-for-orientation LABEL` to inspect one orientation, including the full substitution maps and the factorization tree.
+> one orientation equals one unique EMR edge-energy numerator map.
+
+All denominator contributions with that same numerator call are stored under
+`variants`.  Variant metadata records physical origin such as `cff`, `ltd`,
+`pinch[...]`, or hybrid basis/interpolation labels.  The pretty table therefore
+has one orientation id and possibly many variant rows.
+
+Pretty labels use:
+
+- `+`: sample edge `e` at `+OSE[e]`,
+- `-`: sample edge `e` at `-OSE[e]`,
+- `0`: sample edge `e` at zero energy,
+- `x`: a non-trivial linear map, shown in detail with `--show-details`.
+
+Surface classes are printed as `e` or `h`; numerator-only surfaces are printed
+as `(e)` or `(h)`.
+
+## Energy-Degree Bounds
+
+`--energy-degree-bounds` supplies an upper bound for the EMR energy degree of
+each edge in the numerator:
+
+```bash
+python3 hybrid3d.py build --family cff --dot examples/box.dot \
+  --energy-degree-bounds 0:2,1:2,2:2 --pretty --no-color
+```
+
+The builder first checks the per-loop energy UV degree.  If a residue at
+infinity may contribute, the build fails.
+
+Current exact bounded-degree support:
+
+- `ltd`: no structural change; bounds are reported only.
+- `hybrid` without repeated propagators: collapses to LTD even with bounds.
+- `hybrid` with repeated propagators: caps `<=1` use the existing hybrid formula;
+  higher caps intentionally raise until the repeated-channel contact lift is
+  implemented.
+- `cff`: one-loop non-repeated graphs support arbitrary quadratic-or-lower caps
+  with only regular `E`-surfaces in denominators.
+- `cff`: isolated single-edge cubic caps are supported.
+
+Unsupported bounded CFF cases raise `NotImplementedError`; the old
+`CFF + (LTD - CFF)` contact fallback has been removed.
+
+The main open distinction is quadratic versus genuinely higher power.  Quadratic
+contacts produce only the three black-box samples `+E`, `0`, `-E` and no known
+polynomial numerator residue, so arbitrary quadratic combinations should be the
+next tractable extension once the multiloop CFF contact minor is fixed.  Cubic,
+quartic, and mixed higher caps produce known numerator-side polynomial factors
+after a pinch; those factors must be recursively reduced before the result can
+again be serialized as an E-surface CFF denominator tree.
 
 ## Tests
 
-Run:
+Default suite:
 
 ```bash
-pytest -q tests
+PYTHONPATH=. pytest -q tests
 ```
 
-In this environment the packaged test suite was audited with the Python command passed through `HYBRID3D_PYTHON`, for example:
+The default suite includes:
+
+- validation for all example DOT graphs except the intentionally invalid noisy
+  example,
+- JSON evaluator mutation tests,
+- one-numerator-call-per-orientation tests,
+- CFF/LTD/hybrid structural checks,
+- repeated-propagator three-way diagnostics,
+- bounded-degree CFF/LTD checks for supported caps,
+- a four-loop repeated-channel stress topology.
+
+The old five-loop ultimate basis alignment test is still present but slow.  Run
+it explicitly with:
 
 ```bash
-HYBRID3D_PYTHON='/opt/pyvenv/bin/python -S' \
-PYTHONPATH=/opt/pyvenv/lib/python3.13/site-packages:. \
-/opt/pyvenv/bin/python -S -m pytest -q tests
+HYBRID3D_RUN_SLOW=1 PYTHONPATH=. pytest -q tests/test_cli.py::test_ultimate_five_loop_bases_three_way_and_aligned_momenta
 ```
 
-The tests emphasize graph validation, family-distinct structures, JSON-driven evaluation, mutation sensitivity of substitution maps and skeleton surfaces, unit energy coefficients in exported surfaces, edge-by-edge dot-product numerator checks, and three-way CFF/hybrid/split-mass LTD diagnostics on every valid example topology.  The five `five_loop_ultimate_basis*.dot` fixtures encode the same 5-loop graph in different loop-momentum bases; the slow alignment test transforms a fixed physical loop assignment into each basis and checks that all five representations give the same CFF/hybrid value while the split-mass LTD sequence converges to it.
-
-## Current status
-
-The package is an actively evolving research prototype.  The current hybrid JSON tree stores the coupled CFF-cone denominator factors and the per-orientation edge substitution maps used by the evaluator.  See `docs/hybrid_3d.pdf` for the theoretical and implementation summary.
-
-
-## v12 status note
-
-This package now uses the following display convention consistently:
-
-- `OSE[i]` denotes the internal on-shell energy of internal edge `i`.
-- `E[a]` denotes the external-energy component of external basis momentum `a`.
-
-For CFF surfaces, external shifts are inferred from the internal momentum routing crossing the contracted vertex set.  The dashed external half-edges in the DOT graph are treated as validation/bookkeeping information and are not directly summed when constructing CFF surface shifts; this avoids the spurious doubled external-energy coefficients that appeared in earlier versions.
-
-The `test` subcommand reports a three-way numerical diagnostic.  It now always evaluates the exported CFF JSON and hybrid JSON directly, and reports the split-mass LTD sequence as an independent limiting reference.  Optional `--cff-json` and `--hybrid-json` inputs can be supplied to make the diagnostic use prebuilt JSON instead of rebuilding both structures.
-
-The CFF tree generator expands all acyclic contractions of the selected source/sink boundary, so non-simplicial orientations are represented as genuine sums in the JSON tree.  All repeated-channel graphs, including the dotted box, now use the coupled CFF-cone kernel with a separate hybrid orientation namespace.  This keeps repeated copies as separate edge labels and avoids artificial H- or E-surfaces with internal-energy coefficients such as `2*OSE[i]`; repeated-copy sums are represented as `OSE[i] + OSE[j]`.  Graphs without repeated channels still collapse to the ordinary LTD bundle.
-
-Pure CFF can also be built with explicit EMR energy-degree bounds:
-
-```bash
-python3 hybrid3d.py build --family cff --dot examples/box_pow3.dot --energy-degree-bounds 0:2
-```
-
-When a supplied bound exceeds the ordinary affine-safe class, the builder first checks the per-loop `k_i^0` UV degree.  If every energy contour is convergent, it emits a bounded-degree finite-pole completion as ordinary JSON contact sectors; otherwise it rejects the build because a residue at infinity is possible.  The helper command `test-cff-ltd` compares such a bounded CFF JSON against LTD for a chosen numerator expression.
+See `docs/hybrid_3d.pdf` for the derivation, JSON mapping, and current bounded
+degree limitations.

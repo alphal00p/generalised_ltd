@@ -155,7 +155,7 @@ def main():
     b.add_argument('--family', choices=['ltd', 'cff', 'hybrid'], required=True)
     b.add_argument('--dot', required=True)
     b.add_argument('--json-out')
-    b.add_argument('--energy-degree-bounds', help='For --family cff: per-edge EMR energy degree bounds, e.g. "0:2,3:1" or JSON')
+    b.add_argument('--energy-degree-bounds', help='Per-edge EMR energy degree bounds, e.g. "0:2,3:1" or JSON')
     b.add_argument('--show-json', action='store_true')
     b.add_argument('--pretty', action='store_true')
     b.add_argument('--pretty-orientation')

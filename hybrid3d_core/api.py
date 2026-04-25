@@ -36,6 +36,15 @@ def _build_bundle(parsed, family: str, energy_degree_bounds=None):
         if energy_degree_bounds is not None:
             return build_bounded_degree_cff_bundle(parsed, energy_degree_bounds), 'bounded_degree_bundle'
         return build_pure_cff_bundle(parsed), 'bundle'
+    if energy_degree_bounds is not None:
+        bounds = normalize_energy_degree_bounds(energy_degree_bounds, len(parsed.internal_edges))
+        if not GIO.repeated_groups(parsed):
+            return build_pure_ltd_bundle(tuple(e.signature for e in parsed.internal_edges), len(parsed.ext_names)), 'bounded_degree_ltd_collapse'
+        if max(bounds) > 1:
+            raise NotImplementedError(
+                'Bounded-degree hybrid for repeated propagators is not emitted yet without '
+                'the derivative/contact fallback.  Caps <= 1 keep the existing hybrid formula.'
+            )
     return build_hybrid_bundle_raw(parsed), 'bundle'
 
 

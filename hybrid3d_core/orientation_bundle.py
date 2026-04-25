@@ -157,7 +157,7 @@ class SurfaceDef:
     surface_id: int; kind: str; expr: LinearEnergyExpr; label: str
 @dataclass(frozen=True)
 class OrientationTerm:
-    orientation_id: str; family: str; branch_id: int; edge_orientations: Tuple[int,...]; prefactor_sign: Any; prefactor_half_edges: Tuple[int,...]; surface_chain: Tuple[int,...]; loop_energy_exprs: Tuple[LinearEnergyExpr,...]; edge_energy_exprs: Tuple[LinearEnergyExpr,...]; meta: Dict[str,Any]
+    orientation_id: str; family: str; branch_id: int; edge_orientations: Tuple[int,...]; prefactor_sign: Any; prefactor_half_edges: Tuple[int,...]; surface_chain: Tuple[int,...]; loop_energy_exprs: Tuple[LinearEnergyExpr,...]; edge_energy_exprs: Tuple[LinearEnergyExpr,...]; meta: Dict[str,Any]; numerator_surface_chain: Tuple[int,...] = tuple()
 @dataclass(frozen=True)
 class ExpressionBundle:
     family: str; loop_names: Tuple[str,...]; ext_names: Tuple[str,...]; signatures: Tuple[Signature,...]; surface_cache: Tuple[SurfaceDef,...]; terms: Tuple[OrientationTerm,...]
@@ -834,15 +834,311 @@ def _append_bundle_terms(
             term.loop_energy_exprs,
             term.edge_energy_exprs,
             meta,
+            tuple(surface_map[int(sid)] for sid in term.numerator_surface_chain),
         ))
         branch += 1
     return branch
+
+def _remap_linear_expr(expr: LinearEnergyExpr, edge_map: Dict[int, int]) -> LinearEnergyExpr:
+    return LinearEnergyExpr(
+        tuple((int(edge_map[int(edge_id)]), int(coeff)) for edge_id, coeff in expr.internal_terms),
+        expr.external_terms,
+        expr.const,
+    ).canonical()
+
+def _poly_add(a: Sequence[Fraction], b: Sequence[Fraction]) -> Tuple[Fraction, ...]:
+    n = max(len(a), len(b))
+    out = [Fraction(0) for _ in range(n)]
+    for i, value in enumerate(a):
+        out[i] += Fraction(value)
+    for i, value in enumerate(b):
+        out[i] += Fraction(value)
+    while out and out[-1] == 0:
+        out.pop()
+    return tuple(out)
+
+def _poly_scale(poly: Sequence[Fraction], scale: Fraction) -> Tuple[Fraction, ...]:
+    out = [Fraction(value) * scale for value in poly]
+    while out and out[-1] == 0:
+        out.pop()
+    return tuple(out)
+
+def _poly_mul(a: Sequence[Fraction], b: Sequence[Fraction]) -> Tuple[Fraction, ...]:
+    if not a or not b:
+        return tuple()
+    out = [Fraction(0) for _ in range(len(a) + len(b) - 1)]
+    for i, av in enumerate(a):
+        for j, bv in enumerate(b):
+            out[i + j] += Fraction(av) * Fraction(bv)
+    while out and out[-1] == 0:
+        out.pop()
+    return tuple(out)
+
+def _contact_nodes(bound: int) -> Tuple[int, ...]:
+    needed = max(0, int(bound) - 1)
+    candidates = [0]
+    n = 2
+    while len(candidates) < needed:
+        candidates.extend([n, -n])
+        n += 1
+    return tuple(candidates[:needed])
+
+def _lagrange_basis(nodes: Sequence[int], idx: int) -> Tuple[Fraction, ...]:
+    poly: Tuple[Fraction, ...] = (Fraction(1),)
+    denom = Fraction(1)
+    xj = Fraction(nodes[idx])
+    for k, xk_int in enumerate(nodes):
+        if k == idx:
+            continue
+        xk = Fraction(xk_int)
+        poly = _poly_mul(poly, (-xk, Fraction(1)))
+        denom *= (xj - xk)
+    return _poly_scale(poly, Fraction(1, 1) / denom)
+
+def _contact_weight_polys(bound: int) -> Dict[int, Tuple[Fraction, ...]]:
+    # Contact quotient for D=(q^0)^2-E^2.  With x=q^0/E and interpolation
+    # nodes a_j != +-1:
+    # C(E*x) = sum_j L_j(x) [N(a_jE)-R(a_j)] / ((a_j^2-1)E^2).
+    # The returned polynomials multiply 1/E^2; monomials x^r are encoded later
+    # as q^r/E^(r+2) with numerator-side q factors and half-edge powers.
+    if int(bound) <= 1:
+        return {}
+    nodes = _contact_nodes(int(bound))
+    weights: Dict[int, Tuple[Fraction, ...]] = {}
+    for j, a_int in enumerate(nodes):
+        a = Fraction(a_int)
+        denom = a * a - 1
+        basis = _lagrange_basis(nodes, j)
+        contributions = {
+            int(a_int): Fraction(1, 1) / denom,
+            1: -((a + 1) / 2) / denom,
+            -1: -((1 - a) / 2) / denom,
+        }
+        for sample, scale in contributions.items():
+            weights[sample] = _poly_add(weights.get(sample, tuple()), _poly_scale(basis, scale))
+    return {sample: poly for sample, poly in weights.items() if poly}
+
+def _linear_expr_is_zero(expr: LinearEnergyExpr) -> bool:
+    return not expr.internal_terms and not expr.external_terms and expr.const in {'0', '0.0'}
+
+def _finite_pole_contact_components(
+    edge_id: int,
+    bound: int,
+    current_expr: LinearEnergyExpr,
+    sb: SurfaceCacheBuilder,
+) -> Tuple[Tuple[int, Fraction, Tuple[int, ...], Tuple[int, ...]], ...]:
+    components: List[Tuple[int, Fraction, Tuple[int, ...], Tuple[int, ...]]] = []
+    q_surface = None
+    if not _linear_expr_is_zero(current_expr):
+        q_surface = sb.intern('auto', current_expr, f'contact-q{edge_id}')
+    for sample, poly in _contact_weight_polys(int(bound)).items():
+        for power, coeff in enumerate(poly):
+            if not coeff:
+                continue
+            if power and q_surface is None:
+                continue
+            half_edges = tuple(int(edge_id) for _ in range(power + 2))
+            num_surfaces = tuple(int(q_surface) for _ in range(power)) if power else tuple()
+            pref = Fraction(coeff) * (2 ** (power + 2))
+            if pref:
+                components.append((int(sample), pref, half_edges, num_surfaces))
+    return tuple(components)
+
+def _contract_parsed_edges(parsed: ParsedGraph, pinched_edges: Sequence[int]) -> Tuple[ParsedGraph, Tuple[int, ...]]:
+    pinched = {int(e) for e in pinched_edges}
+    parent = {int(v): int(v) for v in parsed.node_name_to_internal.values()}
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int):
+        ra, rb = find(int(a)), find(int(b))
+        if ra != rb:
+            parent[rb] = ra
+
+    for edge in parsed.internal_edges:
+        if edge.edge_id in pinched:
+            union(edge.tail, edge.head)
+
+    roots = sorted({find(v) for v in parent})
+    root_to_new = {root: idx for idx, root in enumerate(roots)}
+    old_to_new = {old: root_to_new[find(old)] for old in parent}
+    node_name_to_internal = {f'c{idx}': idx for idx in range(len(roots))}
+
+    sub_to_orig: List[int] = []
+    internal_edges = []
+    for edge in parsed.internal_edges:
+        if edge.edge_id in pinched:
+            continue
+        sub_id = len(internal_edges)
+        sub_to_orig.append(int(edge.edge_id))
+        internal_edges.append(type(edge)(
+            sub_id,
+            old_to_new[edge.tail],
+            old_to_new[edge.head],
+            edge.label,
+            edge.mass_key,
+            edge.signature,
+            edge.had_pow,
+        ))
+
+    external_edges = []
+    for edge in parsed.external_edges:
+        source_base = _strip_quotes(edge.source).split(':', 1)[0]
+        dest_base = _strip_quotes(edge.destination).split(':', 1)[0]
+        source_internal = parsed.node_name_to_internal.get(source_base)
+        dest_internal = parsed.node_name_to_internal.get(dest_base)
+        source = f'c{old_to_new[source_internal]}' if source_internal is not None else edge.source
+        dest = f'c{old_to_new[dest_internal]}' if dest_internal is not None else edge.destination
+        external_edges.append(type(edge)(edge.edge_id, source, dest, edge.label, edge.ext_coeffs))
+
+    return ParsedGraph(
+        tuple(internal_edges),
+        tuple(external_edges),
+        parsed.loop_names,
+        parsed.ext_names,
+        node_name_to_internal,
+    ), tuple(sub_to_orig)
+
+def _lift_contracted_cff_terms(
+    parsed: ParsedGraph,
+    bounds: Tuple[int, ...],
+    report: dict,
+    sb: SurfaceCacheBuilder,
+    terms: List[OrientationTerm],
+    branch: int,
+    pinched_edges: Sequence[int],
+) -> int:
+    n_internal = len(parsed.internal_edges)
+    pinched = tuple(sorted(int(e) for e in pinched_edges))
+    subparsed, sub_to_orig = _contract_parsed_edges(parsed, pinched)
+    if not subparsed.internal_edges:
+        return branch
+    n_loops = len(parsed.loop_names)
+    use_terminal_ltd = len(subparsed.internal_edges) == n_loops
+    sub_bundle = (
+        build_pure_ltd_bundle(tuple(e.signature for e in subparsed.internal_edges), len(subparsed.ext_names))
+        if use_terminal_ltd else
+        build_pure_cff_bundle(subparsed)
+    )
+    edge_map = {sub_id: orig_id for sub_id, orig_id in enumerate(sub_to_orig)}
+    surface_map = {
+        int(surface.surface_id): sb.intern(
+            surface.kind,
+            _remap_linear_expr(surface.expr, edge_map),
+            f'pinch{list(pinched)}:{surface.label}',
+        )
+        for surface in sub_bundle.surface_cache
+    }
+    unit_surface = sb.intern('e', LinearEnergyExpr(tuple(), tuple(), '1'), 'terminal-unit') if use_terminal_ltd else None
+    for term in sub_bundle.terms:
+        full_loop_exprs = tuple(_remap_linear_expr(expr, edge_map) for expr in term.loop_energy_exprs)
+        current_edge_exprs = edge_q0_from_loop_exprs(tuple(e.signature for e in parsed.internal_edges), full_loop_exprs, len(parsed.ext_names))
+        base_edge_exprs = [LinearEnergyExpr.zero() for _ in range(n_internal)]
+        full_orient = [0 for _ in range(n_internal)]
+        for sub_id, orig_id in enumerate(sub_to_orig):
+            base_edge_exprs[int(orig_id)] = _remap_linear_expr(term.edge_energy_exprs[sub_id], edge_map)
+            full_orient[int(orig_id)] = int(term.edge_orientations[sub_id])
+        remapped_half_edges = tuple(int(edge_map[int(e)]) for e in term.prefactor_half_edges)
+        remapped_chain = tuple(int(surface_map[int(sid)]) for sid in term.surface_chain)
+        remapped_num_chain = tuple(int(surface_map[int(sid)]) for sid in term.numerator_surface_chain)
+        if use_terminal_ltd and not remapped_chain:
+            remapped_chain = (int(unit_surface),)
+        per_edge_choices = [
+            _finite_pole_contact_components(edge_id, bounds[int(edge_id)], current_edge_exprs[int(edge_id)], sb)
+            for edge_id in pinched
+        ]
+        sample_iter = itertools.product(*per_edge_choices) if pinched else [tuple()]
+        for sample in sample_iter:
+            coeff = Fraction(str(term.prefactor_sign))
+            sample_label_parts = []
+            edge_exprs = list(base_edge_exprs)
+            edge_orient = list(full_orient)
+            extra_half_edges: List[int] = []
+            extra_num_surfaces: List[int] = []
+            for edge_id, (sample_value, sample_pref, sample_half_edges, sample_num_surfaces) in zip(pinched, sample):
+                coeff *= Fraction(sample_pref)
+                extra_half_edges.extend(int(e) for e in sample_half_edges)
+                extra_num_surfaces.extend(int(sid) for sid in sample_num_surfaces)
+                if sample_value == 0:
+                    edge_exprs[int(edge_id)] = LinearEnergyExpr.zero()
+                    edge_orient[int(edge_id)] = 0
+                    sample_label_parts.append(f'e{edge_id}=0')
+                else:
+                    edge_exprs[int(edge_id)] = LinearEnergyExpr.E(int(edge_id), int(sample_value))
+                    edge_orient[int(edge_id)] = 1 if int(sample_value) > 0 else -1
+                    sample_label_parts.append(f'e{edge_id}={"+" if sample_value == 1 else "-" if sample_value == -1 else sample_value}')
+            if pinched and not use_terminal_ltd:
+                coeff *= Fraction((-1) ** len(pinched))
+            if not coeff:
+                continue
+            label = f'cff|{term.orientation_id}' if not pinched else 'pinch[' + ','.join(str(e) for e in pinched) + ']'
+            if sample_label_parts:
+                label += '|' + '|'.join(sample_label_parts)
+            if pinched:
+                label += f'|cff={term.orientation_id}'
+            meta = dict(term.meta)
+            meta.update({
+                'source': 'bounded_degree_e_surface_pinch_cff',
+                'original_source': term.meta.get('source'),
+                'energy_degree_bounds': list(bounds),
+                'energy_divergence': report,
+                'finite_pole_completion': True,
+                'finite_pole_completion_e_surfaces_only': True,
+                'pinched_edges': list(pinched),
+                'contracted_edge_map': list(sub_to_orig),
+                'terminal_ltd_e_surface_sector': bool(use_terminal_ltd),
+                'merge_by_numerator_map': True,
+            })
+            terms.append(OrientationTerm(
+                label,
+                'bounded_cff',
+                branch,
+                tuple(edge_orient),
+                _frac_to_str(coeff),
+                tuple(sorted(remapped_half_edges + tuple(extra_half_edges))),
+                remapped_chain,
+                full_loop_exprs,
+                tuple(edge_exprs),
+                meta,
+                tuple(remapped_num_chain + tuple(extra_num_surfaces)),
+            ))
+            branch += 1
+    return branch
+
+def build_quadratic_e_surface_bounded_cff_bundle(parsed: ParsedGraph, bounds: Tuple[int, ...], report: dict) -> ExpressionBundle:
+    quadratic_edges = tuple(idx for idx, bound in enumerate(bounds) if int(bound) > 1)
+    sb = SurfaceCacheBuilder()
+    terms: List[OrientationTerm] = []
+    branch = 0
+    for r in range(len(quadratic_edges) + 1):
+        for pinched in itertools.combinations(quadratic_edges, r):
+            branch = _lift_contracted_cff_terms(parsed, bounds, report, sb, terms, branch, pinched)
+    enriched = []
+    for idx, term in enumerate(terms):
+        enriched.append(OrientationTerm(
+            term.orientation_id,
+            term.family,
+            idx,
+            term.edge_orientations,
+            term.prefactor_sign,
+            term.prefactor_half_edges,
+            term.surface_chain,
+            term.loop_energy_exprs,
+            term.edge_energy_exprs,
+            term.meta,
+            term.numerator_surface_chain,
+        ))
+    return ExpressionBundle('bounded_cff', tuple(), tuple(), tuple(e.signature for e in parsed.internal_edges), sb.build(), tuple(enriched))
 
 def build_bounded_degree_cff_bundle(parsed, energy_degree_bounds):
     signatures = tuple(e.signature for e in parsed.internal_edges)
     bounds = normalize_energy_degree_bounds(energy_degree_bounds, len(signatures))
     report = assert_energy_uv_convergent(signatures, bounds)
-    if bounds is None or max(bounds, default=0) <= 1:
+    if bounds is None or max(bounds) <= 1:
         bundle = build_pure_cff_bundle(parsed)
         if report is None:
             return bundle
@@ -862,40 +1158,30 @@ def build_bounded_degree_cff_bundle(parsed, energy_degree_bounds):
                 term.loop_energy_exprs,
                 term.edge_energy_exprs,
                 meta,
+                term.numerator_surface_chain,
             ))
         return ExpressionBundle(bundle.family, bundle.loop_names, bundle.ext_names, bundle.signatures, bundle.surface_cache, tuple(terms))
 
-    # Completion used once the numerator bound leaves the ordinary CFF-safe
-    # affine class.  It is serialized as CFF plus explicit finite-pole contact
-    # sectors: ordinary CFF + (LTD - ordinary CFF).  The UV report guarantees
-    # that no residue at infinity is being silently discarded.
-    cff = build_pure_cff_bundle(parsed)
-    ltd = build_pure_ltd_bundle(signatures, len(parsed.ext_names))
-    sb = SurfaceCacheBuilder()
-    terms: List[OrientationTerm] = []
-    branch = 0
-    branch = _append_bundle_terms(terms, sb, cff, Fraction(1), 'cff', 'bounded_degree_ordinary_cff_part', branch)
-    branch = _append_bundle_terms(terms, sb, ltd, Fraction(1), 'contact-ltd', 'bounded_degree_ltd_contact_part', branch)
-    branch = _append_bundle_terms(terms, sb, cff, Fraction(-1), 'contact-minus-cff', 'bounded_degree_subtract_ordinary_cff_part', branch)
-    enriched = []
-    for idx, term in enumerate(terms):
-        meta = dict(term.meta)
-        meta['energy_degree_bounds'] = list(bounds)
-        meta['energy_divergence'] = report
-        meta['finite_pole_completion'] = True
-        enriched.append(OrientationTerm(
-            term.orientation_id,
-            term.family,
-            idx,
-            term.edge_orientations,
-            term.prefactor_sign,
-            term.prefactor_half_edges,
-            term.surface_chain,
-            term.loop_energy_exprs,
-            term.edge_energy_exprs,
-            meta,
-        ))
-    return ExpressionBundle('bounded_cff', tuple(), tuple(), signatures, sb.build(), tuple(enriched))
+    if (
+        len(parsed.loop_names) == 1
+        and not repeated_groups(parsed)
+    ):
+        high_edges = [idx for idx, bound in enumerate(bounds) if int(bound) > 2]
+        if high_edges:
+            isolated_cubic = len(high_edges) == 1 and int(bounds[high_edges[0]]) == 3 and sum(int(x) for x in bounds) == 3
+            if not isolated_cubic:
+                raise NotImplementedError(
+                    'The E-surface-only bounded CFF lift currently supports arbitrary quadratic caps '
+                    'and isolated single-edge cubic caps.  Higher caps or mixed cubic sectors need the '
+                    'next recursive reduction of known numerator-side polynomial factors.'
+                )
+        return build_quadratic_e_surface_bounded_cff_bundle(parsed, bounds, report)
+
+    raise NotImplementedError(
+        'Bounded-degree pure CFF without the LTD-contact fallback is currently implemented '
+        'for one-loop non-repeated graphs only.  Use split masses or lower the bounds for '
+        'this topology until the multiloop/repeated causal pinch lift is implemented.'
+    )
 
 def build_pure_ltd_bundle(signatures,n_external_symbols=None):
     n_internal=len(signatures); n_loops=len(signatures[0][0]); n_external_symbols=n_external_symbols if n_external_symbols is not None else len(signatures[0][1]); sb=SurfaceCacheBuilder(); terms=[]; bc=0

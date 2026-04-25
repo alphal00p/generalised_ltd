@@ -1,10 +1,18 @@
-import json, pathlib, math
+import itertools, json, pathlib, math, os
 from fractions import Fraction
 import pytest
 import mpmath as mp
 
 from hybrid3d_core.api import load_dot_graph, validate_graph, build_structure, evaluate_structure, compare_three_modes, run_test, run_cff_ltd_test
 from hybrid3d_core import graph_io as GIO
+from hybrid3d_core.orientation_bundle import (
+    ExpressionBundle,
+    LinearEnergyExpr,
+    OrientationTerm,
+    SurfaceCacheBuilder,
+    compute_internal_E_values,
+)
+from hybrid3d_core.structure import minimal_structure_from_bundle, evaluate_minimal_bundle
 from hybrid3d_core.structure import numerator_from_expr
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -21,6 +29,15 @@ ULTIMATE_MASSES = {
     "mK2": "1.06",
     "mK3": "0.88",
     "mRet": "1.17",
+}
+FOUR_LOOP_STRESS_MASSES = {
+    "mR1": "1.10",
+    "mB1": "0.70",
+    "mB2": "1.20",
+    "mR2": "0.90",
+    "mK1": "0.80",
+    "mK2": "1.05",
+    "mRet": "1.15",
 }
 ULTIMATE_BASIS_MATRICES = {
     "five_loop_ultimate_basis1.dot": (
@@ -104,6 +121,21 @@ def _solve_loop_basis(matrix, canonical_loop3):
 def _all_edge_external_numerator(n_edges, n_external=4):
     return ' + '.join(f'dot(edges[{i}], ext[{i % n_external}])' for i in range(n_edges))
 
+def _edge_energy_monomial(bounds):
+    return ' * '.join(f'edges[{i}][0]**{power}' for i, power in enumerate(bounds) if power) or '1'
+
+def _edge_map_key(orient):
+    return tuple(json.dumps(expr, sort_keys=True) for expr in orient['edge_q0'])
+
+def assert_unique_edge_numerator_maps(data):
+    seen = set()
+    for orient in data['orientations']:
+        key = _edge_map_key(orient)
+        assert key not in seen, (orient['id'], orient.get('orient_label'))
+        seen.add(key)
+        for variant in orient.get('variants', []):
+            assert variant['edge_q0'] == orient['edge_q0']
+
 def test_validate_all_examples_except_noisy():
     for path in (ROOT/'examples').glob('*.dot'):
         if path.name == 'noisy_example.dot':
@@ -129,6 +161,55 @@ def test_cff_box_contains_nontrivial_contraction_branch():
         for node in orient['tree']['nodes']
     )
 
+def test_normal_box_has_no_repeated_propagators():
+    data = build_structure(dot('box.dot'), 'cff')
+    assert data['graph']['repeated_groups'] == []
+    assert len(data['graph']['loop_names']) == 1
+    assert data['graph']['n_internal_edges'] == 4
+
+def test_numerator_surface_cache_reuses_ids_and_marks_numerator_only():
+    d = dot('box.dot')
+    parsed = GIO.parse_dot_graph(d)
+    signatures = tuple(edge.signature for edge in parsed.internal_edges)
+    sb = SurfaceCacheBuilder()
+    unit = sb.intern('e', LinearEnergyExpr(tuple(), tuple(), '1'), 'unit')
+    shared = sb.intern('auto', LinearEnergyExpr.E(0), 'shared-den-num')
+    assert sb.intern('auto', LinearEnergyExpr.E(0), 'same-shared') == shared
+    h_num = sb.intern('auto', LinearEnergyExpr.E(0) - LinearEnergyExpr.E(1), 'num-h')
+    two = sb.intern('e', LinearEnergyExpr(tuple(), tuple(), '2'), 'num-two')
+
+    term = OrientationTerm(
+        'synthetic',
+        'cff',
+        0,
+        tuple(0 for _ in parsed.internal_edges),
+        1,
+        tuple(),
+        (unit, shared),
+        tuple(LinearEnergyExpr.zero() for _ in parsed.loop_names),
+        tuple(LinearEnergyExpr.zero() for _ in parsed.internal_edges),
+        {'source': 'synthetic_num_surface_test'},
+        (shared, h_num, two),
+    )
+    bundle = ExpressionBundle('synthetic', tuple(), tuple(), signatures, sb.build(), (term,))
+    data = minimal_structure_from_bundle(bundle, parsed, 'synthetic', 'cff', {'ok': True})
+    surfaces = {surface['id']: surface for surface in data['surfaces']}
+
+    assert surfaces[shared]['numerator_only'] is False
+    assert surfaces[h_num]['numerator_only'] is True
+    assert surfaces[two]['numerator_only'] is True
+    assert data['orientations'][0]['num_surfaces'] == [shared, h_num, two]
+
+    ext4, loop3, masses = __import__('hybrid3d_core.api').api._random_default_inputs(d, 1337)
+    E_vals = compute_internal_E_values(signatures, GIO.resolve_edge_masses(parsed, masses), loop3, ext4)
+    value = evaluate_structure(data, d, ext4, loop3, '1', 80, masses)
+    assert abs(value - 2 * (E_vals[0] - E_vals[1])) < mp.mpf('1e-70')
+
+    pretty = __import__('hybrid3d_core.api').api.pretty_structure(data, d, use_color=False)
+    assert 'class' in pretty
+    assert '(h)' in pretty
+    assert '(e)' in pretty
+
 def test_hybrid_repeated_box_uses_confluent_kernel():
     data = build_structure(dot('box_pow3.dot'), 'hybrid')
     assert not any(o['orient_label'].endswith('|coupled') for o in data['orientations'])
@@ -152,6 +233,23 @@ def test_hybrid_collapses_structurally_to_ltd_without_repeated_masses():
     ltd_cmp['family'] = hybrid_cmp['family'] = 'same'
     assert hybrid_cmp == ltd_cmp
 
+def test_bounded_degree_hybrid_without_repeats_still_collapses_to_ltd():
+    d = dot('box.dot')
+    ltd = build_structure(d, 'ltd')
+    hybrid = build_structure(d, 'hybrid', energy_degree_bounds={0: 2, 1: 2})
+    ltd_cmp = json.loads(json.dumps(ltd))
+    hybrid_cmp = json.loads(json.dumps(hybrid))
+    for item in (ltd_cmp, hybrid_cmp):
+        item['family'] = 'same'
+        item['backend'] = 'same'
+        item['graph'].pop('energy_degree_bounds', None)
+        item['graph'].pop('energy_divergence', None)
+    assert hybrid_cmp == ltd_cmp
+
+def test_bounded_degree_hybrid_repeated_requires_new_contact_lift():
+    with pytest.raises(NotImplementedError, match='Bounded-degree hybrid for repeated propagators'):
+        build_structure(dot('box_pow3.dot'), 'hybrid', energy_degree_bounds={0: 2})
+
 def test_hybrid_surfaces_have_unit_energy_coefficients():
     for path in (ROOT/'examples').glob('*.dot'):
         if path.name == 'noisy_example.dot':
@@ -172,19 +270,41 @@ def test_hybrid_surfaces_have_unit_energy_coefficients():
 ])
 def test_hybrid_repeated_orientations_have_unique_physical_numerator_maps(name):
     data = build_structure(dot(name), 'hybrid')
-    seen = set()
+    assert_unique_edge_numerator_maps(data)
     for orient in data['orientations']:
-        key = (
-            tuple(json.dumps(expr, sort_keys=True) for expr in orient['loop_q0']),
-            tuple(json.dumps(expr, sort_keys=True) for expr in orient['edge_q0']),
-        )
-        assert key not in seen, (name, orient['id'], orient['orient_label'])
-        seen.add(key)
         for expr in orient['loop_q0'] + orient['edge_q0']:
             assert expr.get('c', '0') in {'0', '0.0'}, (name, orient['id'], expr)
         for variant in orient.get('variants', []):
             assert variant['loop_q0'] == orient['loop_q0']
             assert variant['edge_q0'] == orient['edge_q0']
+
+def test_every_builder_emits_unique_edge_numerator_maps():
+    cases = [
+        ('box.dot', 'ltd', None),
+        ('box.dot', 'cff', None),
+        ('box.dot', 'hybrid', None),
+        ('box.dot', 'cff', {0: 2, 1: 2, 2: 2}),
+        ('box_pow3.dot', 'cff', None),
+        ('box_pow3.dot', 'hybrid', None),
+    ]
+    for name, family, bounds in cases:
+        data = build_structure(dot(name), family, energy_degree_bounds=bounds)
+        assert_unique_edge_numerator_maps(data)
+
+def test_json_evaluator_calls_numerator_once_per_orientation():
+    d = dot('box.dot')
+    data = build_structure(d, 'cff', energy_degree_bounds={0: 2, 1: 2, 2: 2})
+    ext4, loop3, masses = __import__('hybrid3d_core.api').api._random_default_inputs(d, 1337)
+    calls = {}
+
+    def numerator(loop_four, external_four, edge_four=None, source_edge_four=None):
+        key = tuple(str(edge[0]) for edge in (edge_four or ()))
+        calls[key] = calls.get(key, 0) + 1
+        return mp.mpf(1)
+
+    evaluate_minimal_bundle(data, d, ext4, loop3, numerator, mass_map=masses)
+    assert len(calls) == len(data['orientations'])
+    assert all(count == 1 for count in calls.values())
 
 def test_json_evaluator_consumes_surface_tree_and_substitution_map():
     d = dot('box_pow3.dot')
@@ -216,8 +336,8 @@ def test_family_structures_differ_for_repeated_box():
     hyb = build_structure(d, 'hybrid')
     assert len(ltd['orientations']) != len(cff['orientations'])
     assert [o['orient_label'] for o in hyb['orientations']] != [o['orient_label'] for o in cff['orientations']]
-    assert any('|' in o['orient_label'] for o in hyb['orientations'])
-    assert all('|' not in o['orient_label'] for o in cff['orientations'])
+    assert any(v.get('origin', '').startswith('B') for o in hyb['orientations'] for v in o.get('variants', []))
+    assert all(o['orient_label'].replace('+', '').replace('-', '').replace('0', '').replace('x', '') == '' for o in cff['orientations'])
 
 def test_three_way_box_with_edge_numerator_reports_convergence():
     d = dot('box_pow3.dot')
@@ -239,11 +359,41 @@ def test_iterated_sandwiched_bubble_with_numerators():
 def test_mercedes_build_and_test_runs():
     d = dot('mercedes_multi_repeats.dot')
     data = build_structure(d, 'hybrid')
-    assert any('|' in o['orient_label'] for o in data['orientations'])
+    assert any(v.get('origin', '').startswith('B') for o in data['orientations'] for v in o.get('variants', []))
     rep = run_test(d, numerator_expr='edges[0][0] + edges[3][0]', dps=30, mass_map=MERC_MASSES, seed=7)
     assert float(rep['abs_cff_minus_hybrid']) < 1e-25
     assert rep['pairwise_distinct'] is True
 
+def test_four_loop_stress_default_replaces_ultimate_slow_path():
+    d = dot('four_loop_stress.dot')
+    parsed = GIO.parse_dot_graph(d)
+    assert len(parsed.internal_edges) == 10
+    assert len(parsed.loop_names) == 4
+    assert len(parsed.ext_names) == 4
+    assert sorted(len(group.edge_ids) for group in GIO.repeated_groups(parsed)) == [2, 3]
+
+    cff_data = build_structure(d, 'cff')
+    hybrid_data = build_structure(d, 'hybrid')
+    assert_unique_edge_numerator_maps(cff_data)
+    assert_unique_edge_numerator_maps(hybrid_data)
+    assert len(cff_data['orientations']) == 210
+    assert len(hybrid_data['orientations']) < sum(len(o.get('variants', [])) for o in hybrid_data['orientations'])
+
+    rep = run_test(
+        d,
+        numerator_expr='dot(edges[0], ext[0]) + dot(edges[5], ext[1])',
+        dps=45,
+        epsilons=('0.06', '0.03', '0.015'),
+        mass_map=FOUR_LOOP_STRESS_MASSES,
+        seed=5,
+        cff_data=cff_data,
+        hybrid_data=hybrid_data,
+    )
+    assert mp.mpf(rep['abs_cff_minus_hybrid']) < mp.mpf('1e-40')
+    assert rep['pairwise_distinct'] is True
+    assert mp.mpf(rep['split_ltd'][-1]['abs_to_hybrid']) < mp.mpf('1e-6')
+
+@pytest.mark.skipif(not os.environ.get('HYBRID3D_RUN_SLOW'), reason='set HYBRID3D_RUN_SLOW=1 to run the five-loop ultimate basis test')
 def test_ultimate_five_loop_bases_three_way_and_aligned_momenta():
     numerator = _all_edge_external_numerator(13)
     cff_values = []
@@ -376,28 +526,83 @@ def test_split_mass_pure_cff_ltd_numerator_agreement_improves_with_precision():
         diffs.append(abs(cff - ltd))
     assert diffs[1] < diffs[0] * 1e-25
 
-@pytest.mark.parametrize('name,masses', [
-    ('box_pow3.dot', BOX_MASSES),
-    ('sunrise_pow4.dot', ALL_MASSES),
-    ('proper_iterated_sandwiched_bubble.dot', ITER_MASSES),
-    ('five_loop_ultimate_basis1.dot', ULTIMATE_MASSES),
-])
-def test_bounded_degree_cff_matches_ltd_for_quadratic_edge_energy(name, masses):
-    d = dot(name)
+def test_bounded_degree_cff_matches_ltd_for_quadratic_edge_energy():
+    d = dot('box_pow3.dot')
     parsed = GIO.parse_dot_graph(d)
     split_dot, _ = GIO.build_split_mass_dot(d)
     ext4, loop3, default_masses = __import__('hybrid3d_core.api').api._random_default_inputs(split_dot, 1337)
-    split_masses = GIO.build_split_mass_assignments(parsed, {**default_masses, **masses}, '0.001')
+    split_masses = GIO.build_split_mass_assignments(parsed, {**default_masses, **BOX_MASSES}, '0.001')
     cff_data = build_structure(split_dot, 'cff', energy_degree_bounds={0: 2})
     ltd_data = build_structure(split_dot, 'ltd')
     assert cff_data['backend'] == 'bounded_degree_bundle'
     assert cff_data['graph']['energy_divergence']['convergent'] is True
-    assert any(o['meta']['source'] == 'bounded_degree_ltd_contact_part' for o in cff_data['orientations'])
+    assert {s['k'] for s in cff_data['surfaces']} <= {'e'}
+    assert any(o['meta']['source'] == 'bounded_degree_e_surface_pinch_cff' for o in cff_data['orientations'])
 
     numerator = 'edges[0][0]**2'
     cff = evaluate_structure(cff_data, split_dot, ext4, loop3, numerator, 80, split_masses)
     ltd = evaluate_structure(ltd_data, split_dot, ext4, loop3, numerator, 80, split_masses)
-    assert abs(cff - ltd) < mp.mpf('1e-65'), (name, cff, ltd)
+    assert abs(cff - ltd) < mp.mpf('1e-65'), (cff, ltd)
+
+@pytest.mark.parametrize('name,masses', [
+    ('sunrise_pow4.dot', ALL_MASSES),
+    ('proper_iterated_sandwiched_bubble.dot', ITER_MASSES),
+    ('five_loop_ultimate_basis1.dot', ULTIMATE_MASSES),
+])
+def test_bounded_degree_cff_rejects_multiloop_without_ltd_contact_fallback(name, masses):
+    d = dot(name)
+    parsed = GIO.parse_dot_graph(d)
+    split_dot, _ = GIO.build_split_mass_dot(d)
+    with pytest.raises(NotImplementedError, match='one-loop non-repeated'):
+        build_structure(split_dot, 'cff', energy_degree_bounds={0: 2})
+
+def test_normal_box_bounded_degree_cff_matches_ltd_for_all_convergent_edge_power_bounds():
+    d = dot('box.dot')
+    ext4, loop3, masses = __import__('hybrid3d_core.api').api._random_default_inputs(d, 1337)
+    ltd_data = build_structure(d, 'ltd')
+    # Four one-loop propagators give denominator degree 8 in k^0.  The
+    # one-dimensional contour is convergent for total numerator degree <= 6.
+    bounds_to_test = [
+        bounds for bounds in itertools.product(range(3), repeat=4)
+        if sum(bounds) <= 6
+    ]
+    bounds_to_test.extend(
+        tuple(3 if i == edge else 0 for i in range(4))
+        for edge in range(4)
+    )
+    assert len(bounds_to_test) == 80
+
+    for bounds in bounds_to_test:
+        cff_data = build_structure(d, 'cff', energy_degree_bounds=list(bounds))
+        assert cff_data['graph']['energy_divergence']['convergent'] is True
+        numerator = _edge_energy_monomial(bounds)
+        cff = evaluate_structure(cff_data, d, ext4, loop3, numerator, 80, masses)
+        ltd = evaluate_structure(ltd_data, d, ext4, loop3, numerator, 80, masses)
+        assert abs(cff - ltd) < mp.mpf('1e-65'), (bounds, numerator, cff, ltd)
+
+def test_normal_box_bounded_degree_cff_structure_morphs_after_affine_degree():
+    d = dot('box.dot')
+    ordinary = build_structure(d, 'cff')
+    linear = build_structure(d, 'cff', energy_degree_bounds=[1, 0, 0, 0])
+    bilinear = build_structure(d, 'cff', energy_degree_bounds=[1, 1, 0, 0])
+    quadratic = build_structure(d, 'cff', energy_degree_bounds=[2, 0, 0, 0])
+    maximal = build_structure(d, 'cff', energy_degree_bounds=[2, 2, 1, 1])
+    triple_quadratic = build_structure(d, 'cff', energy_degree_bounds=[2, 2, 2, 0])
+
+    assert len(ordinary['orientations']) == 14
+    assert len(linear['orientations']) == len(ordinary['orientations'])
+    assert len(bilinear['orientations']) == len(ordinary['orientations'])
+    assert len(quadratic['orientations']) > len(ordinary['orientations'])
+    assert len(maximal['orientations']) > len(quadratic['orientations'])
+    assert {s['k'] for s in quadratic['surfaces']} <= {'e'}
+    assert {s['k'] for s in maximal['surfaces']} <= {'e'}
+    assert {s['k'] for s in triple_quadratic['surfaces']} <= {'e'}
+    assert all(o['meta'].get('source') != 'bounded_degree_ltd_contact_part' for o in quadratic['orientations'])
+    assert all(o['meta'].get('source') != 'bounded_degree_ltd_contact_part' for o in triple_quadratic['orientations'])
+    assert any(o['meta']['source'] == 'bounded_degree_e_surface_pinch_cff' for o in quadratic['orientations'])
+    assert any(o['meta']['source'] == 'bounded_degree_e_surface_pinch_cff' for o in triple_quadratic['orientations'])
+    assert maximal['graph']['energy_divergence']['loops'][0]['divergence_degree'] == -2
+    assert triple_quadratic['graph']['energy_divergence']['loops'][0]['divergence_degree'] == -2
 
 def test_bounded_degree_cff_repairs_known_quadratic_cff_ltd_mismatch():
     d = dot('box_pow3.dot')
@@ -413,10 +618,16 @@ def test_bounded_degree_cff_repairs_known_quadratic_cff_ltd_mismatch():
     assert abs(bounded - ltd) < mp.mpf('1e-65')
 
 def test_bounded_degree_cff_rejects_nonconvergent_energy_bounds():
-    d = dot('box_pow3.dot')
-    split_dot, _ = GIO.build_split_mass_dot(d)
+    split_dot = dot('box.dot')
     with pytest.raises(ValueError, match='residue at infinity'):
-        build_structure(split_dot, 'cff', energy_degree_bounds={'*': 20})
+        build_structure(split_dot, 'cff', energy_degree_bounds={0: 7})
+
+def test_bounded_degree_cff_rejects_unimplemented_higher_contact_recursion():
+    split_dot = dot('box.dot')
+    with pytest.raises(NotImplementedError, match='known numerator-side polynomial factors'):
+        build_structure(split_dot, 'cff', energy_degree_bounds={0: 4})
+    with pytest.raises(NotImplementedError, match='known numerator-side polynomial factors'):
+        build_structure(split_dot, 'cff', energy_degree_bounds={0: 3, 1: 1})
 
 def test_cff_ltd_test_helper_uses_bounded_degree_cff():
     d = dot('box_pow3.dot')

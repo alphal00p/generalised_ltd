@@ -29,6 +29,7 @@ def c(text: str, code: str, use_color: bool = True) -> str:
 def _color_sign(ch: str, use_color: bool = True) -> str:
     if ch == '+': return c('+', Fore.GREEN + Style.BRIGHT, use_color)
     if ch == '-': return c('-', Fore.RED + Style.BRIGHT, use_color)
+    if ch == 'x': return c('x', Fore.YELLOW + Style.BRIGHT, use_color)
     return c('0', Fore.WHITE + Style.BRIGHT, use_color)
 
 
@@ -39,7 +40,7 @@ def _render_signs(signs: List[int], use_color: bool = True) -> str:
 def _render_orientation_label(label: str, use_color: bool = True) -> str:
     out = []
     for ch in str(label):
-        if ch in '+-0':
+        if ch in '+-0x':
             out.append(_color_sign(ch, use_color))
         elif ch == '|':
             out.append(c('|', Fore.YELLOW + Style.BRIGHT, use_color))
@@ -119,8 +120,10 @@ def _orientation_variants(orient: Dict[str, Any]) -> List[Dict[str, Any]]:
     if variants:
         return list(variants)
     return [{
+        'origin': orient.get('meta', {}).get('source', 'term'),
         'pref': orient['pref'],
         'half_edges': orient['half_edges'],
+        'num_surfaces': orient.get('num_surfaces', []),
         'tree': orient['tree'],
     }]
 
@@ -149,6 +152,9 @@ def render_pretty(
     lines: List[str] = []
     ose_map = _ose_display_map(data)
     kind_map = {int(s['id']): s['k'] for s in data['surfaces']}
+    def surface_class(surf: Dict[str, Any]) -> str:
+        kind = str(surf['k'])
+        return f'({kind})' if surf.get('numerator_only') else kind
 
     title = f"{data['family'].upper()} structure"
     subtitle = f"backend={data['backend']}"
@@ -160,6 +166,16 @@ def render_pretty(
     summary.add_row([c(data['family'], Fore.GREEN + Style.BRIGHT, use_color), c(data['backend'], Fore.MAGENTA + Style.BRIGHT, use_color), data['graph']['n_internal_edges'], len(data['surfaces']), len(data['orientations'])])
     lines.append(summary.get_string())
 
+    degree_report = data.get('graph', {}).get('energy_divergence')
+    if degree_report:
+        lines.append('\n' + c('Energy Degree Bounds', Fore.BLUE + Style.BRIGHT, use_color))
+        lines.append('bounds=' + str(data['graph'].get('energy_degree_bounds', [])) + '  convergent=' + str(degree_report.get('convergent')))
+        div_tbl = PrettyTable()
+        div_tbl.field_names = [c('loop', Fore.CYAN + Style.BRIGHT, use_color), c('active_edges', Fore.CYAN + Style.BRIGHT, use_color), c('num_deg', Fore.CYAN + Style.BRIGHT, use_color), c('den_deg', Fore.CYAN + Style.BRIGHT, use_color), c('divergence', Fore.CYAN + Style.BRIGHT, use_color), c('ok', Fore.CYAN + Style.BRIGHT, use_color)]
+        for item in degree_report.get('loops', []):
+            div_tbl.add_row([item['loop'], item['active_edges'], item['numerator_degree_bound'], item['denominator_degree'], item['divergence_degree'], item['convergent']])
+        lines.append(div_tbl.get_string())
+
     if parsed is not None:
         ch_tbl = PrettyTable()
         ch_tbl.field_names = [c('edge', Fore.CYAN + Style.BRIGHT, use_color), c('tail', Fore.CYAN + Style.BRIGHT, use_color), c('head', Fore.CYAN + Style.BRIGHT, use_color), c('label', Fore.CYAN + Style.BRIGHT, use_color), c('mass', Fore.CYAN + Style.BRIGHT, use_color)]
@@ -169,24 +185,24 @@ def render_pretty(
         lines.append(ch_tbl.get_string())
 
     surf_tbl = PrettyTable()
-    surf_tbl.field_names = [c('sid', Fore.CYAN + Style.BRIGHT, use_color), c('kind', Fore.CYAN + Style.BRIGHT, use_color), c('expr', Fore.CYAN + Style.BRIGHT, use_color)]
+    surf_tbl.field_names = [c('sid', Fore.CYAN + Style.BRIGHT, use_color), c('class', Fore.CYAN + Style.BRIGHT, use_color), c('expr', Fore.CYAN + Style.BRIGHT, use_color)]
     for surf in data['surfaces']:
-        surf_tbl.add_row([c(str(surf['id']), Fore.GREEN + Style.BRIGHT, use_color), c(str(surf['k']), Fore.MAGENTA + Style.BRIGHT, use_color), _render_surface_expr(surf, use_color, ose_map)])
+        surf_tbl.add_row([c(str(surf['id']), Fore.GREEN + Style.BRIGHT, use_color), c(surface_class(surf), Fore.MAGENTA + Style.BRIGHT, use_color), _render_surface_expr(surf, use_color, ose_map)])
     lines.append('\n' + c('Surface cache', Fore.BLUE + Style.BRIGHT, use_color))
     lines.append(surf_tbl.get_string())
 
     shown = [o for o in data['orientations'] if _matches(o, orientation_id)]
     or_tbl = PrettyTable()
-    or_tbl.field_names = [c('id', Fore.CYAN + Style.BRIGHT, use_color), c('orient', Fore.CYAN + Style.BRIGHT, use_color), c('pref', Fore.CYAN + Style.BRIGHT, use_color), c('half_edges', Fore.CYAN + Style.BRIGHT, use_color), c('e-surface ids', Fore.CYAN + Style.BRIGHT, use_color), c('root_nodes', Fore.CYAN + Style.BRIGHT, use_color)]
+    or_tbl.field_names = [c('id', Fore.CYAN + Style.BRIGHT, use_color), c('orient', Fore.CYAN + Style.BRIGHT, use_color), c('variant', Fore.CYAN + Style.BRIGHT, use_color), c('pref', Fore.CYAN + Style.BRIGHT, use_color), c('half_edges', Fore.CYAN + Style.BRIGHT, use_color), c('den e-surface ids', Fore.CYAN + Style.BRIGHT, use_color), c('num surface ids', Fore.CYAN + Style.BRIGHT, use_color), c('root_nodes', Fore.CYAN + Style.BRIGHT, use_color)]
     for orient in shown:
         variants = _orientation_variants(orient)
-        eids_set = set()
-        for var in variants:
-            eids_set.update(_collect_surface_ids(var['tree'], var['tree']['roots'], kind_map, only_kind='e'))
-        pref = orient['pref'] if len(variants) == 1 else f"{len(variants)} variants"
-        half_edges = orient['half_edges'] if len(variants) == 1 else 'var'
-        roots = orient['tree']['roots'] if len(variants) == 1 else 'var'
-        or_tbl.add_row([c(str(orient['id']), Fore.GREEN + Style.BRIGHT, use_color), _render_orientation_label(orient.get('orient_label', ''), use_color), c(str(pref), Fore.YELLOW + Style.BRIGHT, use_color), half_edges, sorted(eids_set), roots])
+        for vidx, var in enumerate(variants):
+            eids = _collect_surface_ids(var['tree'], var['tree']['roots'], kind_map, only_kind='e')
+            num_surfaces = sorted(int(sid) for sid in var.get('num_surfaces', []))
+            id_cell = c(str(orient['id']), Fore.GREEN + Style.BRIGHT, use_color) if vidx == 0 else ''
+            orient_cell = _render_orientation_label(orient.get('orient_label', ''), use_color) if vidx == 0 else ''
+            origin = c(str(var.get('origin', 'term')), Fore.WHITE + Style.BRIGHT, use_color)
+            or_tbl.add_row([id_cell, orient_cell, origin, c(str(var['pref']), Fore.YELLOW + Style.BRIGHT, use_color), var['half_edges'], eids, num_surfaces, var['tree']['roots']])
     lines.append('\n' + c('Orientations', Fore.BLUE + Style.BRIGHT, use_color))
     lines.append(or_tbl.get_string())
 
@@ -196,7 +212,12 @@ def render_pretty(
     detailed = [o for o in shown if _matches(o, details_for)] if details_for is not None else shown
     for orient in detailed:
         lines.append('\n' + c(f"Orientation #{orient['id']}", Fore.BLUE + Style.BRIGHT, use_color) + '  ' + _render_orientation_label(orient.get('orient_label', ''), use_color))
-        q_tbl = PrettyTable(); q_tbl.field_names = [c('loop', Fore.CYAN + Style.BRIGHT, use_color), c('q0 substitution', Fore.CYAN + Style.BRIGHT, use_color)]
+        if data.get('family') == 'cff':
+            lines.append(c('Derived loop-energy map', Fore.BLUE + Style.BRIGHT, use_color) + ': ' + 'used only when the numerator references loops[...] ; edge_q0 is the CFF EMR numerator map')
+            loop_header = 'derived q0 map'
+        else:
+            loop_header = 'q0 substitution'
+        q_tbl = PrettyTable(); q_tbl.field_names = [c('loop', Fore.CYAN + Style.BRIGHT, use_color), c(loop_header, Fore.CYAN + Style.BRIGHT, use_color)]
         for i, expr in enumerate(orient['loop_q0']):
             q_tbl.add_row([c(str(i), Fore.GREEN + Style.BRIGHT, use_color), _render_surface_expr(expr, use_color, ose_map)])
         lines.append(q_tbl.get_string())
@@ -219,7 +240,9 @@ def render_pretty(
         variants = _orientation_variants(orient)
         for vidx, var in enumerate(variants):
             if len(variants) > 1:
-                lines.append(c(f"variant {vidx}", Fore.BLUE + Style.BRIGHT, use_color) + f": pref={var['pref']} half_edges={var['half_edges']}")
+                lines.append(c(f"variant {vidx}", Fore.BLUE + Style.BRIGHT, use_color) + f": origin={var.get('origin', 'term')} pref={var['pref']} half_edges={var['half_edges']} num_surfaces={var.get('num_surfaces', [])}")
+            elif var.get('num_surfaces'):
+                lines.append(c('numerator surfaces', Fore.BLUE + Style.BRIGHT, use_color) + ': ' + ', '.join(c(str(s), Fore.GREEN + Style.BRIGHT, use_color) + ':' + c(kind_map.get(int(s), '?'), Fore.MAGENTA + Style.BRIGHT, use_color) for s in var.get('num_surfaces', [])))
             for root in var['tree']['roots']:
                 walk(var['tree'], root, 0)
     return '\n'.join(lines)
