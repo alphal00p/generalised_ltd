@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from .graph_io import parse_dot_graph, resolve_edge_masses
 
+DEFAULT_PROFILE_CALLS = 10
+
 
 @dataclass(frozen=True)
 class VectorRef:
@@ -639,15 +641,23 @@ def evaluate_symbolica(
     if profile:
         eval_fn(inputs[:1])
     start = time.perf_counter()
-    result = eval_fn(inputs)
+    if profile:
+        result = None
+        for _ in range(DEFAULT_PROFILE_CALLS):
+            result = eval_fn(inputs)
+    else:
+        result = eval_fn(inputs)
     elapsed = time.perf_counter() - start
     value = result[0][0]
     if not profile:
         return value, None
     return value, {
         "batch_size": batch_size,
+        "profile_calls": DEFAULT_PROFILE_CALLS,
+        "total_evaluations": batch_size * DEFAULT_PROFILE_CALLS,
         "total_seconds": elapsed,
-        "seconds_per_sample": elapsed / batch_size,
+        "seconds_per_sample": elapsed / (batch_size * DEFAULT_PROFILE_CALLS),
+        "seconds_per_call": elapsed / DEFAULT_PROFILE_CALLS,
     }
 
 

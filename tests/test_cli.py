@@ -434,8 +434,12 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
     )
     profile = json.loads(profiled.stdout)
     assert profile['batch_size'] == 8
+    assert profile['profile_calls'] == 10
+    assert profile['total_evaluations'] == 80
     assert profile['seconds_per_sample'] > 0
+    assert profile['seconds_per_call'] > 0
     assert profile['per_sample'].endswith(('us', 'ms', 's'))
+    assert profile['per_call'].endswith(('us', 'ms', 's'))
 
     profile_table = subprocess.run(
         [
@@ -495,7 +499,10 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
     )
     builtin_profile = json.loads(builtin_profiled.stdout)
     assert builtin_profile['batch_size'] == 4
+    assert builtin_profile['profile_calls'] == 10
+    assert builtin_profile['total_evaluations'] == 40
     assert builtin_profile['seconds_per_sample'] > 0
+    assert builtin_profile['seconds_per_call'] > 0
     assert abs(float(internal.stdout.strip()) - float(builtin_profile['value'])) < 1e-10
 
     complex_json = tmp_path / 'box_cff_complex.json'

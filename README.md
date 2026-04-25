@@ -114,9 +114,13 @@ python3 hybrid3d.py evaluate \
   --orientation-json demo/box_hybrid.json \
   --dot examples/graphs/box_pow3.dot \
   --evaluator-backend symbolica_eager_symjit \
-  --profiling 10000 \
+  --profiling 100 \
   --masses '{"m1":0.8,"m2":1.1,"m3":0.9,"m4":1.2}'
 ```
+
+Profiling times 10 evaluator calls over the requested batch size and reports
+both per-sample and per-call timings.  `--profiling` without an explicit value
+uses a batch size of 100.
 
 Compare several compiled JSON evaluators in one timing table:
 
@@ -128,7 +132,7 @@ python3 hybrid3d.py evaluate \
   --profile-json hybrid=demo/box_hybrid.json \
   --dot examples/graphs/box_pow3.dot \
   --evaluator-backend symbolica \
-  --profiling 10000 \
+  --profiling 100 \
   --masses '{"m1":0.8,"m2":1.1,"m3":0.9,"m4":1.2}'
 ```
 

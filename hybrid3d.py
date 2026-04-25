@@ -286,7 +286,7 @@ def cmd_evaluate(args):
             ext4,
             loop3,
             masses,
-            batch_size=args.profiling or 1,
+            batch_size=args.profiling if args.profiling is not None else 1,
             profile=args.profiling is not None,
             backend=symbolica_backend,
         )
@@ -294,10 +294,14 @@ def cmd_evaluate(args):
             print(json.dumps({
                 'value': str(val),
                 'batch_size': profile['batch_size'],
+                'profile_calls': profile['profile_calls'],
+                'total_evaluations': profile['total_evaluations'],
                 'total_time': SYMEVAL.format_duration(profile['total_seconds']),
                 'per_sample': SYMEVAL.format_duration(profile['seconds_per_sample']),
+                'per_call': SYMEVAL.format_duration(profile['seconds_per_call']),
                 'total_seconds': profile['total_seconds'],
                 'seconds_per_sample': profile['seconds_per_sample'],
+                'seconds_per_call': profile['seconds_per_call'],
             }, indent=2))
         else:
             print(val)
@@ -310,16 +314,22 @@ def cmd_evaluate(args):
         num_fn = ST.numerator_from_expr(args.numerator_expr or '1')
         start = time.perf_counter()
         val = None
-        for _ in range(batch_size):
-            val = ST.evaluate_minimal_bundle(data, dot, ext4, loop3, num_fn, mass_map=masses)
+        for _ in range(SYMEVAL.DEFAULT_PROFILE_CALLS):
+            for _ in range(batch_size):
+                val = ST.evaluate_minimal_bundle(data, dot, ext4, loop3, num_fn, mass_map=masses)
         elapsed = time.perf_counter() - start
+        total_evaluations = batch_size * SYMEVAL.DEFAULT_PROFILE_CALLS
         print(json.dumps({
             'value': str(val),
             'batch_size': batch_size,
+            'profile_calls': SYMEVAL.DEFAULT_PROFILE_CALLS,
+            'total_evaluations': total_evaluations,
             'total_time': SYMEVAL.format_duration(elapsed),
-            'per_sample': SYMEVAL.format_duration(elapsed / batch_size),
+            'per_sample': SYMEVAL.format_duration(elapsed / total_evaluations),
+            'per_call': SYMEVAL.format_duration(elapsed / SYMEVAL.DEFAULT_PROFILE_CALLS),
             'total_seconds': elapsed,
-            'seconds_per_sample': elapsed / batch_size,
+            'seconds_per_sample': elapsed / total_evaluations,
+            'seconds_per_call': elapsed / SYMEVAL.DEFAULT_PROFILE_CALLS,
         }, indent=2))
         return
     val = evaluate_structure(data, dot, ext4, loop3, args.numerator_expr or '1', args.dps, masses)
@@ -477,7 +487,7 @@ def main():
     e.add_argument('--seed', type=int, default=1337)
     e.add_argument('--use-symbolica', action='store_true')
     e.add_argument('--evaluator-backend', choices=['builtin', 'symbolica', 'symbolica_compiled', 'symbolica_eager', 'symbolica_eager_symjit'], default='builtin', help='Evaluator backend. "symbolica" is an alias for compiled evaluation for single runs and all available Symbolica modes in multi-JSON profiling.')
-    e.add_argument('--profiling', type=int, help='Evaluate this many identical samples and report timing')
+    e.add_argument('--profiling', nargs='?', const=100, type=int, help='Report timing for 10 evaluator calls over batches of this size; defaults to 100 when no size is given')
     e.add_argument('--profile-label', default='baseline', help='Label for --orientation-json in a multi-JSON profiling table')
     e.add_argument('--profile-json', action='append', help='Additional JSON to profile as LABEL=PATH; repeat to compare several compiled structures')
     e.add_argument('--profile-evaluator-backends', help='Comma-separated Symbolica backends for --profile-json; default is all modes available in each JSON')

@@ -6,7 +6,7 @@ cd "$ROOT"
 
 DOT="$ROOT/examples/graphs/box_pow3.dot"
 OUT="${HYBRID3D_DEMO_DIR:-$ROOT/tmp/box_pow3_cli_showcase}"
-BATCH="${HYBRID3D_PROFILE_BATCH:-1000}"
+BATCH="${HYBRID3D_PROFILE_BATCH:-100}"
 NUMERATOR="${HYBRID3D_NUMERATOR:-dot(edges[0], ext[0]) + edges[3][0]}"
 MASSES='{"m1":0.8,"m2":1.1,"m3":0.9,"m4":1.2}'
 
