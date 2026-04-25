@@ -114,6 +114,16 @@ def _collect_surface_ids(tree: Dict[str, Any], roots: List[int], surface_kinds: 
     for r in roots: walk(r)
     return sorted(used)
 
+def _orientation_variants(orient: Dict[str, Any]) -> List[Dict[str, Any]]:
+    variants = orient.get('variants')
+    if variants:
+        return list(variants)
+    return [{
+        'pref': orient['pref'],
+        'half_edges': orient['half_edges'],
+        'tree': orient['tree'],
+    }]
+
 
 def _mass_desc(parsed, edge_idx: int, use_color: bool = True) -> str:
     e = parsed.internal_edges[edge_idx]
@@ -169,8 +179,14 @@ def render_pretty(
     or_tbl = PrettyTable()
     or_tbl.field_names = [c('id', Fore.CYAN + Style.BRIGHT, use_color), c('orient', Fore.CYAN + Style.BRIGHT, use_color), c('pref', Fore.CYAN + Style.BRIGHT, use_color), c('half_edges', Fore.CYAN + Style.BRIGHT, use_color), c('e-surface ids', Fore.CYAN + Style.BRIGHT, use_color), c('root_nodes', Fore.CYAN + Style.BRIGHT, use_color)]
     for orient in shown:
-        eids = _collect_surface_ids(orient['tree'], orient['tree']['roots'], kind_map, only_kind='e')
-        or_tbl.add_row([c(str(orient['id']), Fore.GREEN + Style.BRIGHT, use_color), _render_orientation_label(orient.get('orient_label', ''), use_color), c(str(orient['pref']), Fore.YELLOW + Style.BRIGHT, use_color), orient['half_edges'], eids, orient['tree']['roots']])
+        variants = _orientation_variants(orient)
+        eids_set = set()
+        for var in variants:
+            eids_set.update(_collect_surface_ids(var['tree'], var['tree']['roots'], kind_map, only_kind='e'))
+        pref = orient['pref'] if len(variants) == 1 else f"{len(variants)} variants"
+        half_edges = orient['half_edges'] if len(variants) == 1 else 'var'
+        roots = orient['tree']['roots'] if len(variants) == 1 else 'var'
+        or_tbl.add_row([c(str(orient['id']), Fore.GREEN + Style.BRIGHT, use_color), _render_orientation_label(orient.get('orient_label', ''), use_color), c(str(pref), Fore.YELLOW + Style.BRIGHT, use_color), half_edges, sorted(eids_set), roots])
     lines.append('\n' + c('Orientations', Fore.BLUE + Style.BRIGHT, use_color))
     lines.append(or_tbl.get_string())
 
@@ -192,14 +208,18 @@ def render_pretty(
         if skel:
             lines.append(c('Hybrid LTD skeleton surfaces', Fore.BLUE + Style.BRIGHT, use_color) + ': ' + ', '.join(c(str(s), Fore.GREEN + Style.BRIGHT, use_color) + ':' + c(kind_map.get(int(s), '?'), Fore.MAGENTA + Style.BRIGHT, use_color) for s in skel))
         lines.append(c('Factorization tree', Fore.BLUE + Style.BRIGHT, use_color))
-        def walk(node_id: int, depth: int):
-            node = orient['tree']['nodes'][node_id]
+        def walk(tree: Dict[str, Any], node_id: int, depth: int):
+            node = tree['nodes'][node_id]
             prefix = '  ' * depth
             surf_text = ', '.join(c(str(s), Fore.GREEN + Style.BRIGHT, use_color) for s in node['surfaces'])
             child_text = ', '.join(c(str(ch), Fore.YELLOW + Style.BRIGHT, use_color) for ch in node['children'])
             lines.append(f"{prefix}{c('node', Fore.MAGENTA + Style.BRIGHT, use_color)} {c(str(node_id), Fore.GREEN + Style.BRIGHT, use_color)}: surfaces=[{surf_text}] children=[{child_text}]")
             for child in node['children']:
-                walk(child, depth + 1)
-        for root in orient['tree']['roots']:
-            walk(root, 0)
+                walk(tree, child, depth + 1)
+        variants = _orientation_variants(orient)
+        for vidx, var in enumerate(variants):
+            if len(variants) > 1:
+                lines.append(c(f"variant {vidx}", Fore.BLUE + Style.BRIGHT, use_color) + f": pref={var['pref']} half_edges={var['half_edges']}")
+            for root in var['tree']['roots']:
+                walk(var['tree'], root, 0)
     return '\n'.join(lines)

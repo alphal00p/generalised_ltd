@@ -133,6 +133,7 @@ def test_hybrid_repeated_box_uses_confluent_kernel():
     data = build_structure(dot('box_pow3.dot'), 'hybrid')
     assert not any(o['orient_label'].endswith('|coupled') for o in data['orientations'])
     assert all(o['meta']['source'] == 'hybrid_confluent_ltd_interpolation' for o in data['orientations'])
+    assert all(o['meta']['numerator_sample_kind'] == 'physical_on_shell_affine_orbit' for o in data['orientations'])
     assert any(o['meta']['alpha'] != [0] for o in data['orientations'])
     assert len(data['orientations']) != len(build_structure(dot('box_pow3.dot'), 'cff')['orientations'])
 
@@ -160,6 +161,31 @@ def test_hybrid_surfaces_have_unit_energy_coefficients():
             assert all(abs(int(coeff)) == 1 for _, coeff in surface['e'].get('i', [])), (path.name, surface)
             assert all(abs(int(coeff)) == 1 for _, coeff in surface['e'].get('x', [])), (path.name, surface)
 
+@pytest.mark.parametrize('name', [
+    'box_pow3.dot',
+    'sunrise_pow4.dot',
+    'kite_double_nested_repeats.dot',
+    'kite_nested_repeats.dot',
+    'kite_sandwich_repeats.dot',
+    'proper_iterated_sandwiched_bubble.dot',
+    'mercedes_multi_repeats.dot',
+])
+def test_hybrid_repeated_orientations_have_unique_physical_numerator_maps(name):
+    data = build_structure(dot(name), 'hybrid')
+    seen = set()
+    for orient in data['orientations']:
+        key = (
+            tuple(json.dumps(expr, sort_keys=True) for expr in orient['loop_q0']),
+            tuple(json.dumps(expr, sort_keys=True) for expr in orient['edge_q0']),
+        )
+        assert key not in seen, (name, orient['id'], orient['orient_label'])
+        seen.add(key)
+        for expr in orient['loop_q0'] + orient['edge_q0']:
+            assert expr.get('c', '0') in {'0', '0.0'}, (name, orient['id'], expr)
+        for variant in orient.get('variants', []):
+            assert variant['loop_q0'] == orient['loop_q0']
+            assert variant['edge_q0'] == orient['edge_q0']
+
 def test_json_evaluator_consumes_surface_tree_and_substitution_map():
     d = dot('box_pow3.dot')
     data = build_structure(d, 'hybrid')
@@ -169,13 +195,16 @@ def test_json_evaluator_consumes_surface_tree_and_substitution_map():
     v0 = evaluate_structure(data, d, ext, loop3, num, 50, BOX_MASSES)
     mut = json.loads(json.dumps(data))
     orient = mut['orientations'][0]
-    sid = orient['tree']['nodes'][orient['tree']['roots'][0]]['surfaces'][0]
+    tree = orient.get('variants', [orient])[0]['tree']
+    sid = tree['nodes'][tree['roots'][0]]['surfaces'][0]
     mut['surfaces'][sid]['e'] = {'i': [], 'x': [], 'c': '1'}
     v1 = evaluate_structure(mut, d, ext, loop3, num, 50, BOX_MASSES)
     assert abs(v0 - v1) > 1e-12
     mut2 = json.loads(json.dumps(data))
     for orient2 in mut2['orientations']:
         orient2['edge_q0'][3] = {'i': [], 'x': [], 'c':'1'}
+        for variant in orient2.get('variants', []):
+            variant['edge_q0'][3] = {'i': [], 'x': [], 'c':'1'}
     v2 = evaluate_structure(mut2, d, ext, loop3, 'dot(edges[3], ext[0])', 50, BOX_MASSES)
     v3 = evaluate_structure(data, d, ext, loop3, 'dot(edges[3], ext[0])', 50, BOX_MASSES)
     assert abs(v2 - v3) > 1e-12

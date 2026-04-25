@@ -356,8 +356,8 @@ weight and did not perform the equal-energy recombination before export.
 
 \section{Physical numerator sampling}
 
-The numerator should remain black-box.  The physical CFF/tau route suggests the
-following replacement for the present unit finite stencil.
+The numerator should remain black-box.  The physical CFF/tau route replaces the
+unit finite stencil by on-shell samples.
 \begin{enumerate}[leftmargin=2em]
   \item Keep the repeated copies split through the local CFF/tau sign sum.
   \item Evaluate the black-box numerator at the signed on-shell copy energies
@@ -367,10 +367,49 @@ following replacement for the present unit finite stencil.
   \item Only then set \(\omega_a=\omega_g\).
 \end{enumerate}
 For an affine EMR-energy numerator this procedure must reduce to the same
-derivative information that the path-finder currently obtains from
-\texttt{nD0p}/\texttt{nD0m}.  The difference is representational: the physical
-samples are made at on-shell energies and external-energy shifts, rather than
-at arbitrary dimensionless displacements of a residue-basis coordinate.
+derivative information that the path-finder obtained from
+\texttt{nD0p}/\texttt{nD0m}.  The difference is representational and physical:
+the samples are made at on-shell energies and external-energy shifts, rather
+than at arbitrary dimensionless displacements of a residue-basis coordinate.
+
+The implemented affine reconstruction is expressed as moment matching.  Let
+\(\mathcal S\) be the physical sample orbit for the active repeated cut
+channels.  A sample \(s\in\mathcal S\) assigns a chain sign
+\(\chi_g=\pm1\) to each active collapsed channel and signs
+\(\tau_{g,a}=\pm1\) to its repeated copies, subject to the endpoint rule
+\[
+  \tau_{g,a}=+1\ \forall a \Rightarrow \chi_g=+1,\qquad
+  \tau_{g,a}=-1\ \forall a \Rightarrow \chi_g=-1.
+\]
+Mixed copy-sign sectors admit both chain signs.  The loop energies are solved
+from \(Q_g^0=\chi_g\omega_g\), while repeated numerator edge energies are
+sampled directly at \(q_{g,a}^0=\tau_{g,a}\omega_{g,a}\).  All substitutions
+are therefore linear combinations of external energies and internal on-shell
+energies; no dimensionful constant displacement appears.
+
+For the value part of the confluent residue the rational weights \(c_s\) obey
+\[
+  \sum_{s\in\mathcal S} c_s=1,\qquad
+  \sum_{s\in\mathcal S} c_s q_{j,s}^0=q_{j,\star}^0
+\]
+for every loop and EMR edge energy \(q_j^0\), where \(\star\) is the collapsed
+diagonal pole.  For one numerator derivative with respect to the active channel
+\(g\), the exported term carries one extra \((2\omega_g)^{-1}\) half-edge factor
+and the weights obey
+\[
+  \sum_{s\in\mathcal S} c_s=0,\qquad
+  \sum_{s\in\mathcal S} c_s q_{j,s}^0
+    =2\omega_g\,\frac{\partial q_j^0}{\partial Q_g^0}.
+\]
+These equations are exact for every black-box numerator affine in the EMR
+energy variables.
+
+When several repeated groups are active in the same residue, the implementation
+uses the affine compression of the physical orbit: the diagonal physical sample
+plus one complete sign orbit for each active group, keeping the other active
+groups on the diagonal.  A full tensor-product orbit would only be needed for
+bilinear or higher numerator dependence between groups, which is outside the
+current CFF-compatible numerator class.
 
 In the final JSON, such a recombined physical sector should still look like an
 ordinary orientation entry:
@@ -381,8 +420,10 @@ ordinary orientation entry:
   \item \texttt{loop\_q0} and \texttt{edge\_q0} store one physical numerator
         substitution rule.
 \end{itemize}
-Thus the evaluator contract need not change.  What should change is the
-orientation construction and naming.
+Terms with the same numerator substitution rule are merged into one orientation;
+their denominator pieces are stored as top-level variants under that
+orientation.  Thus the evaluator contract does not change: it still receives an
+orientation with one numerator map and a sum of ordinary denominator trees.
 
 \section{Implications for orientation labels}
 
@@ -397,8 +438,8 @@ is useful for debugging the algebraic expansion:
         interpolation part;
   \item \(g1\) means one derivative was assigned to the known denominator
         weight;
-  \item \texttt{nD0m} means the minus point of an algebraic numerator
-        derivative stencil.
+  \item \texttt{nD0m} meant the minus point of an algebraic numerator
+        derivative stencil in the old path-finder.
 \end{itemize}
 The more physical label should record a recombined CFF/tau sector instead.  A
 candidate structure is
@@ -413,6 +454,14 @@ copy sector is \(+++\).  It says only that the collapsed third-order pole is the
 positive-energy pole of the repeated channel.  Mixed repeated-copy sign sectors
 are expected to reappear in the physical CFF/tau organization as members of the
 orbit whose confluent limit produces the same \(b/g/\mu\)-type weights.
+In the current JSON labels this appears as a suffix such as
+\[
+  \texttt{physG3tpmpcm},
+\]
+meaning that the repeated group represented by edge 3 is sampled with copy
+signs \(+,-,+\) and chain sign \(-\).  The old \(b/g\) markers may still appear
+inside merged denominator variants, but each exported orientation has a single
+physical numerator map.
 
 \section{Next theoretical target}
 
@@ -426,9 +475,9 @@ program is:
         limits;
   \item show that each orbit reproduces one or more terms in the current
         confluent expansion;
-  \item replace the current unit derivative stencil by on-shell divided
-        differences so that every emitted energy substitution is a linear
-        combination of external energies and internal on-shell energies;
+  \item replace unit derivative stencils by on-shell divided differences so
+        that every emitted energy substitution is a linear combination of
+        external energies and internal on-shell energies;
   \item keep the final output in the same orientation JSON format.
 \end{enumerate}
 
@@ -529,9 +578,9 @@ for the active-edge signs \(\theta_e\).  The confluent derivative acts only on t
 
 This is more verbose than the old 17-sector table, but it is the price of avoiding numerator derivatives while keeping the numerator fully black-box.
 In the affine-numerator implementation this interpolation is emitted in the
-equivalent residue-basis stencil form: the numerator is sampled at finite
-displacements of the cut energy variable around \(Q_g^0=\sigma_g\omega_g\),
-and each sample is a separate JSON orientation.
+physical on-shell form described above: the numerator is sampled at signed
+on-shell copy energies and at the corresponding chain energy substitutions, and
+each distinct sample map is a separate JSON orientation.
 
 \chapter{Implementation Consequences}
 
@@ -545,21 +594,23 @@ The needed ingredients are represented as follows.
         the existing factorization chain.
   \item Powers of cut half-edge factors \((2\omega_e)^{-p}\) are encoded by
         repeated entries in the existing \texttt{half\_edges} list.
-  \item Per-orientation rational prefactors from the expanded confluent weights
+  \item Per-denominator rational prefactors from the expanded confluent weights
         are stored in the existing \texttt{pref} field.
   \item Orientation labels that distinguish \(B,\sigma,\theta,\mu\), not just edge signs.
-  \item Explicit active-edge and finite-sample metadata so tests can verify the
-        numerator replacement rule.
+  \item Explicit physical-chain and repeated-copy sign metadata so tests can
+        verify the numerator replacement rule.
+  \item A \texttt{variants} list when several denominator pieces share one
+        numerator energy map.
 \end{itemize}
 
 For the currently supported numerator class, namely numerators affine in the
 edge-momentum-representation energy variables, numerator derivatives appearing
-in the derivation are replaced by exact finite interpolation stencils at finite
-energy displacements.  Each stencil point is exported as an ordinary orientation
-with one concrete \texttt{loop\_q0}/\texttt{edge\_q0} substitution map.  The
-denominator derivative part is exported as a sum of ordinary surface products
-with repeated surface ids.  Thus the same evaluator consumes pure CFF, pure LTD,
-and hybrid CFF JSON.
+in the derivation are replaced by exact physical on-shell interpolation weights.
+Each distinct sample point is exported as an ordinary orientation with one
+concrete \texttt{loop\_q0}/\texttt{edge\_q0} substitution map.  The denominator
+derivative part is exported as a sum of ordinary surface products with repeated
+surface ids, possibly under \texttt{variants}.  Thus the same evaluator consumes
+pure CFF, pure LTD, and hybrid CFF JSON.
 
 \section{Testing requirements}
 
@@ -568,6 +619,9 @@ For any repeated graph, a valid three-way test must check both numerical agreeme
   \item pure CFF, hybrid, and split-mass LTD values must agree within tolerance;
   \item none of the three reported values should be exactly the same string or the same exact high-precision object, except for graphs with no repeated propagators;
   \item hybrid JSON must contain LTD-collapse sectors, active-edge sampled sectors, or confluent surface powers when appropriate;
+  \item repeated hybrid JSON must not contain two orientations with the same
+        numerator energy map;
+  \item physical numerator maps must have no non-zero constant energy shifts;
   \item hybrid must collapse structurally to LTD when no repeated group is present.
 \end{itemize}
 
@@ -576,11 +630,11 @@ For any repeated graph, a valid three-way test must check both numerical agreeme
 The repeated-channel Python backend now implements the affine-numerator
 confluent version described above.  It collapses repeated copies to powered
 channels for the denominator algebra, expands the confluent derivatives into
-ordinary orientation entries, and samples the black-box numerator at explicit
-finite EMR-energy assignments.  The implementation deliberately no longer
+ordinary denominator variants, and samples the black-box numerator at explicit
+physical on-shell EMR-energy assignments.  The implementation deliberately no longer
 relabels pure CFF orientations as hybrid orientations.
 
-Two limitations remain explicit.  First, the finite numerator stencil currently
+Two limitations remain explicit.  First, the physical interpolation currently
 assumes the numerator is affine in the EMR energy variables; this covers the
 edge--external dot-product tests used for the repeated topologies.  Second, the
 old local-chain implementation remains useful only as a structural warning: its

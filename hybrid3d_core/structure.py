@@ -68,38 +68,97 @@ def _json_pref(value):
         return str(value)
     return frac.numerator if frac.denominator == 1 else str(value)
 
+def _physical_orientation_label(label: str) -> str:
+    parts = str(label).split('|')
+    if not parts:
+        return str(label)
+    basis = next((part for part in parts[1:] if part.startswith('B')), None)
+    sample = str(label).split(':')[-1] if ':' in str(label) else parts[-1]
+    if basis:
+        return f'{parts[0]}|{basis}|{sample}'
+    return f'{parts[0]}|{sample}'
+
 
 def minimal_structure_from_bundle(bundle, parsed, backend: str, family: str, validation: dict):
     surfaces = [{'id': s.surface_id, 'k': s.kind, 'e': _linear_to_min(s.expr)} for s in bundle.surface_cache]
     by_orient = {}
+    tree_cache: Dict[Tuple[Tuple[int, ...], ...], Tuple[int, Dict[str, Any]]] = {}
+    def intern_tree(chains: List[Tuple[int, ...]]):
+        key = tuple(sorted(tuple(int(x) for x in chain) for chain in chains))
+        cached = tree_cache.get(key)
+        if cached is not None:
+            return cached
+        item = (len(tree_cache), _compress_chains(list(key)))
+        tree_cache[key] = item
+        return item
+
     for t in bundle.terms:
         loop_q0 = [_linear_to_min(x) for x in t.loop_energy_exprs]
         edge_q0 = [_linear_to_min(x) for x in t.edge_energy_exprs]
-        key = (
-            str(t.orientation_id),
-            tuple(int(x) for x in t.edge_orientations),
-            str(t.prefactor_sign),
-            tuple(int(x) for x in t.prefactor_half_edges),
-            tuple(_expr_key(x) for x in loop_q0),
-            tuple(_expr_key(x) for x in edge_q0),
-        )
+        map_key = (tuple(_expr_key(x) for x in loop_q0), tuple(_expr_key(x) for x in edge_q0))
+        if t.meta.get('merge_by_numerator_map'):
+            key = ('numap', map_key)
+        else:
+            key = (
+                'term',
+                str(t.orientation_id),
+                tuple(int(x) for x in t.edge_orientations),
+                str(t.prefactor_sign),
+                tuple(int(x) for x in t.prefactor_half_edges),
+                map_key,
+            )
         entry = by_orient.setdefault(key, {
             'id': None,
-            'orient_label': str(t.orientation_id),
+            'orient_label': _physical_orientation_label(str(t.orientation_id)) if t.meta.get('merge_by_numerator_map') else str(t.orientation_id),
             'edge_signs': list(t.edge_orientations),
-            'pref': _json_pref(t.prefactor_sign),
-            'half_edges': list(t.prefactor_half_edges),
             'loop_q0': loop_q0,
             'edge_q0': edge_q0,
-            'chains': [],
-            'meta': t.meta,
+            'terms': {},
+            'meta': dict(t.meta),
+            'merge_by_numerator_map': bool(t.meta.get('merge_by_numerator_map')),
+            'merged_orientation_labels': [],
         })
-        entry['chains'].append(tuple(t.surface_chain))
+        if str(t.orientation_id) not in entry['merged_orientation_labels']:
+            entry['merged_orientation_labels'].append(str(t.orientation_id))
+        term_key = (tuple(int(x) for x in t.prefactor_half_edges), tuple(int(x) for x in t.surface_chain))
+        entry['terms'][term_key] = entry['terms'].get(term_key, Fraction(0)) + Fraction(str(t.prefactor_sign))
     orientations = []
     for idx, entry in enumerate(by_orient.values()):
-        entry['tree'] = _compress_chains(entry.pop('chains'))
-        entry['id'] = idx
-        orientations.append(entry)
+        variant_chains: Dict[Tuple[Fraction, Tuple[int, ...]], List[Tuple[int, ...]]] = {}
+        for (half_edges, chain), pref in entry.pop('terms').items():
+            if not pref:
+                continue
+            variant_chains.setdefault((pref, half_edges), []).append(chain)
+        variants = []
+        for (pref, half_edges), chains in variant_chains.items():
+            denom_id, tree = intern_tree(chains)
+            variants.append({
+                'denom_id': denom_id,
+                'pref': _json_pref(pref),
+                'half_edges': list(half_edges),
+                'loop_q0': entry['loop_q0'],
+                'edge_q0': entry['edge_q0'],
+                'tree': tree,
+            })
+        if not variants:
+            continue
+        first = variants[0]
+        out = {
+            'id': idx,
+            'orient_label': entry['orient_label'],
+            'edge_signs': entry['edge_signs'],
+            'pref': first['pref'],
+            'half_edges': first['half_edges'],
+            'loop_q0': entry['loop_q0'],
+            'edge_q0': entry['edge_q0'],
+            'tree': first['tree'],
+            'meta': entry['meta'],
+        }
+        if entry['merge_by_numerator_map']:
+            out['meta']['merged_orientation_count'] = len(entry['merged_orientation_labels'])
+            out['meta']['variant_count'] = len(variants)
+            out['variants'] = variants
+        orientations.append(out)
     return {
         'schema_version': 4,
         'family': family,
@@ -158,6 +217,8 @@ def evaluate_minimal_bundle(data, dot, ext4, loop3, numerator_fn, mass_map=None,
     ext4_mp = tuple(tuple(mpf(x) for x in p) for p in ext4)
 
     total = mp.mpf(0)
+    denominator_cache: Dict[Tuple[Any, Tuple[int, ...]], mp.mpf] = {}
+    numerator_cache: Dict[Tuple[Any, Any], mp.mpf] = {}
     for orient in data['orientations']:
         variants = orient.get('variants')
         if not variants:
@@ -170,14 +231,28 @@ def evaluate_minimal_bundle(data, dot, ext4, loop3, numerator_fn, mass_map=None,
             }]
         for var in variants:
             pref = mp.mpf(var['pref'])
-            for e in var['half_edges']:
-                pref /= (2 * E_vals[int(e)])
-            loop_q0 = [_min_eval(x, E_vals, OSE_vals) for x in var['loop_q0']]
-            loop_four = tuple((loop_q0[i], *(mpf(x) for x in loop3[i])) for i in range(len(loop3)))
-            edge_four = compute_edge_four_vectors(signatures, masses, loop3, ext4_mp, var['edge_q0'], parsed, ose_override=ose_override)
-            num = mp.mpf(numerator_fn(loop_four, ext4_mp, edge_four, edge_four))
-            treesum = mp.mpf(0)
-            for r in var['tree']['roots']:
-                treesum += _sum_tree(var['tree'], r, data['surfaces'], E_vals, OSE_vals)
-            total += pref * num * treesum
+            half_edges = tuple(int(e) for e in var['half_edges'])
+            denom_key = (var.get('denom_id', id(var['tree'])), half_edges)
+            denom = denominator_cache.get(denom_key)
+            if denom is None:
+                denom = mp.mpf(1)
+                for e in half_edges:
+                    denom /= (2 * E_vals[int(e)])
+                treesum = mp.mpf(0)
+                for r in var['tree']['roots']:
+                    treesum += _sum_tree(var['tree'], r, data['surfaces'], E_vals, OSE_vals)
+                denom *= treesum
+                denominator_cache[denom_key] = denom
+            num_key = (
+                tuple(_expr_key(x) for x in var['loop_q0']),
+                tuple(_expr_key(x) for x in var['edge_q0']),
+            )
+            num = numerator_cache.get(num_key)
+            if num is None:
+                loop_q0 = [_min_eval(x, E_vals, OSE_vals) for x in var['loop_q0']]
+                loop_four = tuple((loop_q0[i], *(mpf(x) for x in loop3[i])) for i in range(len(loop3)))
+                edge_four = compute_edge_four_vectors(signatures, masses, loop3, ext4_mp, var['edge_q0'], parsed, ose_override=ose_override)
+                num = mp.mpf(numerator_fn(loop_four, ext4_mp, edge_four, edge_four))
+                numerator_cache[num_key] = num
+            total += pref * num * denom
     return total
