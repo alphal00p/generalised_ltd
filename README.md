@@ -115,10 +115,11 @@ Current exact bounded-degree support:
   residue-basis energy coordinates.
 - `cff`: one-loop non-repeated graphs support arbitrary quadratic-or-lower caps
   with only regular `E`-surfaces in denominators.
-- `cff`: multiloop and split-repeated graphs support arbitrary quadratic-or-lower
-  caps by summing finite-pole remainder/contact sectors.  Contact sectors are
-  exact JSON terms but may contain lower-sector LTD `H`-surfaces in the
-  denominator.
+- `cff`: multiloop and split-repeated graphs support quadratic-or-lower caps by
+  summing finite-pole remainder/contact sectors.  Deleted lower sectors are
+  decomposed into loop-energy matroid components and rebuilt as auxiliary CFF
+  causal minors, so denominator surfaces remain `E`-only; numerator-side cached
+  surfaces may still be `E` or `H`.
 - `cff`: unsplit repeated-propagator graphs with quadratic caps use the
   confluent repeated-pole limit also used by bounded `hybrid`, avoiding singular
   equal-mass contact denominators.
@@ -129,12 +130,14 @@ Unsupported bounded CFF cases raise `NotImplementedError`; the old
 
 The main open distinction is quadratic versus genuinely higher power.  Quadratic
 contacts produce only the three black-box samples `+E`, `0`, `-E` and no known
-polynomial numerator residue, so arbitrary quadratic combinations are now
-implemented.  The remaining representational improvement is replacing the
-multiloop lower LTD contact trees by fully E-surface-only CFF causal minors.
-Cubic, quartic, and mixed higher caps produce known numerator-side polynomial
-factors after a pinch; those factors must be recursively reduced before the
-result can again be serialized.
+polynomial numerator residue, so the implemented path covers the tested
+quadratic caps, including multiloop energy monomials and individual squared
+edge--external dot products.  Products that make a deleted lower causal
+component quadratic through several different spectator edge energies are the
+next refinement: they require interpolation in a component energy basis, not
+only per-edge finite-pole divisions.  Cubic, quartic, and mixed higher caps
+produce known numerator-side polynomial factors after a pinch; those factors
+must be recursively reduced before the result can again be serialized.
 
 ## Tests
 

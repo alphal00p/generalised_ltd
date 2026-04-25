@@ -8,6 +8,8 @@ import math
 import mpmath as mp
 
 from .graph_io import ParsedGraph, repeated_groups, _strip_quotes
+from . import graph_io as GIO
+from . import graph_signatures as SIG2G
 from .ltd_cut_structure_generator import CutStructureGenerator, CLOSE_BELOW
 
 Signature = Tuple[Tuple[int, ...], Tuple[int, ...]]
@@ -952,9 +954,10 @@ def assert_energy_uv_convergent(signatures: Sequence[Signature], bounds: Any):
         raise ValueError(f'Energy-degree bounds leave non-vanishing residue at infinity ({details})')
     return report
 
-def build_pure_cff_bundle(parsed):
+def build_pure_cff_bundle(parsed, include_duplicate_excess_sign: bool = True):
     n_internal=len(parsed.internal_edges); signatures=tuple(e.signature for e in parsed.internal_edges); n_external=len(parsed.ext_names); basis=choose_basis_indices(signatures); sb=SurfaceCacheBuilder(); base=build_base_graph_from_parsed(parsed); terms=[]; bc=0
-    overall_sign=-1 if (len(signatures[0][0])-1+_duplicate_signature_excess(signatures)) % 2 else 1
+    duplicate_excess = _duplicate_signature_excess(signatures) if include_duplicate_excess_sign else 0
+    overall_sign=-1 if (len(signatures[0][0])-1+duplicate_excess) % 2 else 1
     for bitmask in range(1<<n_internal):
         graph=base.clone(); signs=[1]*n_internal
         for edge_index in range(n_internal):
@@ -1346,40 +1349,412 @@ def build_quadratic_e_surface_bounded_cff_bundle(parsed: ParsedGraph, bounds: Tu
         ))
     return ExpressionBundle('bounded_cff', tuple(), tuple(), tuple(e.signature for e in parsed.internal_edges), sb.build(), tuple(enriched))
 
-def _lift_deleted_ltd_quadratic_sector_terms(
+def _row_coordinates_in_basis(basis_rows: Sequence[Sequence[int]], row: Sequence[int]) -> Tuple[Fraction, ...]:
+    basis = [tuple(Fraction(x) for x in basis_row) for basis_row in basis_rows]
+    target = tuple(Fraction(x) for x in row)
+    rank = len(basis)
+    if rank == 0:
+        if any(target):
+            raise ValueError('Cannot express a non-zero row in an empty basis')
+        return tuple()
+    ncols = len(target)
+    for cols in itertools.combinations(range(ncols), rank):
+        square = [[basis[b][c] for b in range(rank)] for c in cols]
+        if _rank(square) == rank:
+            return tuple(_solve_fraction_system(square, [target[c] for c in cols]))
+    raise ValueError('Could not find independent columns for row projection')
+
+def _vector_matroid_components(signatures: Sequence[Signature]) -> Tuple[Tuple[int, ...], ...]:
+    rows = [tuple(int(x) for x in sig[0]) for sig in signatures]
+    nonzero = [idx for idx, row in enumerate(rows) if any(row)]
+    parent = {idx: idx for idx in nonzero}
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int):
+        ra, rb = find(int(a)), find(int(b))
+        if ra != rb:
+            parent[rb] = ra
+
+    basis: List[int] = []
+    basis_rows: List[Tuple[int, ...]] = []
+    for edge_id in nonzero:
+        trial = basis_rows + [rows[edge_id]]
+        if _rank(trial) > len(basis_rows):
+            basis.append(edge_id)
+            basis_rows.append(rows[edge_id])
+            continue
+        coords = _row_coordinates_in_basis(basis_rows, rows[edge_id])
+        for basis_edge, coeff in zip(basis, coords):
+            if coeff:
+                union(edge_id, basis_edge)
+
+    grouped: Dict[int, List[int]] = {}
+    for edge_id in nonzero:
+        grouped.setdefault(find(edge_id), []).append(edge_id)
+    zero_components = [(idx,) for idx, row in enumerate(rows) if not any(row)]
+    components = [tuple(sorted(group)) for group in grouped.values()] + zero_components
+    return tuple(sorted(components, key=lambda item: item[0] if item else -1))
+
+def _component_basis_edges(signatures: Sequence[Signature], edge_ids: Sequence[int]) -> Tuple[int, ...]:
+    rows = [tuple(int(x) for x in signatures[int(edge_id)][0]) for edge_id in edge_ids]
+    selected: List[int] = []
+    selected_rows: List[Tuple[int, ...]] = []
+    current_rank = 0
+    for edge_id, row in zip(edge_ids, rows):
+        trial_rank = _rank(selected_rows + [row])
+        if trial_rank > current_rank:
+            selected.append(int(edge_id))
+            selected_rows.append(row)
+            current_rank = trial_rank
+    return tuple(selected)
+
+def _fraction_tuple_is_integral(values: Sequence[Fraction]) -> bool:
+    return all(Fraction(value).denominator == 1 for value in values)
+
+def _project_component_parsed(
+    parsed: ParsedGraph,
+    edge_ids: Sequence[int],
+    use_synthetic_cycle: bool,
+) -> Tuple[ParsedGraph, Tuple[int, ...], Tuple[int, ...]]:
+    edge_ids = tuple(int(edge_id) for edge_id in edge_ids)
+    signatures = tuple(edge.signature for edge in parsed.internal_edges)
+    basis_edges = _component_basis_edges(signatures, edge_ids)
+    rank = len(basis_edges)
+    if rank == 0:
+        raise NotImplementedError('Zero-rank CFF lower-sector factors are not implemented yet')
+    basis_rows = [tuple(int(x) for x in signatures[edge_id][0]) for edge_id in basis_edges]
+    projected = []
+    for edge_id in edge_ids:
+        coords = _row_coordinates_in_basis(basis_rows, signatures[edge_id][0])
+        if not _fraction_tuple_is_integral(coords):
+            raise NotImplementedError(
+                'Quadratic lower-sector CFF projection produced non-integral loop-energy coefficients'
+            )
+        projected.append(tuple(int(c) for c in coords))
+
+    if use_synthetic_cycle:
+        node_name_to_internal = {f'aux{i}': i for i in range(len(edge_ids))}
+        internal_edges = []
+        for local_id, (edge_id, loop_coeffs) in enumerate(zip(edge_ids, projected)):
+            edge = parsed.internal_edges[edge_id]
+            internal_edges.append(type(edge)(
+                local_id,
+                local_id,
+                (local_id + 1) % len(edge_ids),
+                edge.label,
+                edge.mass_key,
+                (loop_coeffs, edge.signature[1]),
+                edge.had_pow,
+            ))
+        return ParsedGraph(
+            tuple(internal_edges),
+            tuple(),
+            tuple(f'ell{i}' for i in range(rank)),
+            parsed.ext_names,
+            node_name_to_internal,
+        ), edge_ids, basis_edges
+
+    loop_names = tuple(f'ell{i}' for i in range(rank))
+    projected_signatures = [
+        (loop_coeffs, parsed.internal_edges[edge_id].signature[1])
+        for edge_id, loop_coeffs in zip(edge_ids, projected)
+    ]
+    marker_masses = [f'__lower_cff_edge_{local_id}' for local_id in range(len(edge_ids))]
+    try:
+        dot = SIG2G.reconstruct_dot(
+            projected_signatures,
+            loop_names=list(loop_names),
+            ext_names=list(parsed.ext_names),
+            edge_masses=marker_masses,
+            require_connected=True,
+            minimize_external_legs=True,
+        )
+    except Exception as exc:
+        raise NotImplementedError(
+            'Could not reconstruct a graphic auxiliary CFF denominator for a quadratic lower sector'
+        ) from exc
+    reconstructed = GIO.parse_dot_graph(dot, loop_names=loop_names, ext_names=parsed.ext_names)
+    marker_to_sub = {
+        marker: int(edge_id)
+        for marker, edge_id in zip(marker_masses, edge_ids)
+    }
+    local_to_sub = []
+    internal_edges = []
+    for new_id, edge in enumerate(reconstructed.internal_edges):
+        if edge.mass_key not in marker_to_sub:
+            raise RuntimeError(f'Missing lower-sector edge marker {edge.mass_key!r} in reconstructed graph')
+        sub_id = marker_to_sub[edge.mass_key]
+        orig = parsed.internal_edges[sub_id]
+        local_to_sub.append(sub_id)
+        internal_edges.append(type(edge)(
+            new_id,
+            edge.tail,
+            edge.head,
+            orig.label,
+            orig.mass_key,
+            edge.signature,
+            orig.had_pow,
+        ))
+    component_parsed = ParsedGraph(
+        tuple(internal_edges),
+        reconstructed.external_edges,
+        loop_names,
+        parsed.ext_names,
+        reconstructed.node_name_to_internal,
+    )
+    return component_parsed, tuple(local_to_sub), basis_edges
+
+def _derive_orientations_from_edge_exprs(edge_exprs: Sequence[LinearEnergyExpr]) -> Tuple[int, ...]:
+    out: List[int] = []
+    for edge_id, expr in enumerate(edge_exprs):
+        if expr == LinearEnergyExpr.E(edge_id, 1):
+            out.append(1)
+        elif expr == LinearEnergyExpr.E(edge_id, -1):
+            out.append(-1)
+        else:
+            out.append(0)
+    return tuple(out)
+
+def _lower_cff_component_bundles(parsed: ParsedGraph):
+    signatures = tuple(edge.signature for edge in parsed.internal_edges)
+    components = _vector_matroid_components(signatures)
+    out = []
+    for component_edges in components:
+        rank = _rank([signatures[edge_id][0] for edge_id in component_edges])
+        if rank == 0:
+            raise NotImplementedError('Zero-rank CFF lower-sector factors are not implemented yet')
+        use_synthetic_cycle = len(component_edges) == rank
+        component_parsed, local_to_sub, basis_edges = _project_component_parsed(parsed, component_edges, use_synthetic_cycle)
+        if len(component_parsed.internal_edges) == rank:
+            bundle = build_pure_ltd_bundle(
+                tuple(edge.signature for edge in component_parsed.internal_edges),
+                len(component_parsed.ext_names),
+            )
+            backend = 'terminal_ltd_factor'
+        else:
+            bundle = build_pure_cff_bundle(component_parsed, include_duplicate_excess_sign=False)
+            backend = 'auxiliary_cff_factor'
+        prefactor_correction = (
+            -1
+            if backend == 'auxiliary_cff_factor' and (len(component_parsed.internal_edges) - rank + 1) % 2
+            else 1
+        )
+        out.append({
+            'edges': tuple(int(e) for e in component_edges),
+            'rank': int(rank),
+            'basis_edges': tuple(int(e) for e in basis_edges),
+            'local_to_sub': tuple(int(e) for e in local_to_sub),
+            'parsed': component_parsed,
+            'bundle': bundle,
+            'backend': backend,
+            'prefactor_correction': int(prefactor_correction),
+        })
+    return tuple(out)
+
+def build_lower_sector_cff_bundle(parsed: ParsedGraph) -> ExpressionBundle:
+    """Build an E-surface-only CFF bundle for a pinched lower denominator.
+
+    Contact sectors from quadratic numerator completion delete propagators before
+    the remaining energy integrations are carried out.  The deleted graph can be
+    misleading: independent loop-energy factors may still share vertices.  This
+    builder decomposes the remaining denominator by the vector matroid of its
+    loop-energy rows, builds one CFF factor per component, and combines the
+    factors only after lifting them back to the original lower-sector edge ids.
+    """
+    n_internal = len(parsed.internal_edges)
+    signatures = tuple(edge.signature for edge in parsed.internal_edges)
+    total_rank = _rank([sig[0] for sig in signatures])
+    n_loops = len(parsed.loop_names)
+    if total_rank != n_loops:
+        raise NotImplementedError(
+            f'Quadratic lower-sector CFF needs full loop-energy rank after pinching; got rank {total_rank} for {n_loops} loops'
+        )
+
+    components = _lower_cff_component_bundles(parsed)
+    sb = SurfaceCacheBuilder()
+    component_payloads = []
+    for component in components:
+        local_to_sub = component['local_to_sub']
+        edge_map = {local_id: sub_id for local_id, sub_id in enumerate(local_to_sub)}
+        surface_map = {
+            int(surface.surface_id): sb.intern(
+                surface.kind,
+                _remap_linear_expr(surface.expr, edge_map),
+                f"lower-cff:{component['edges']}:{surface.label}",
+            )
+            for surface in component['bundle'].surface_cache
+        }
+        component_payloads.append((component, surface_map))
+
+    partials = [dict(
+        coeff=Fraction(1),
+        half_edges=tuple(),
+        surface_chain=tuple(),
+        numerator_surface_chain=tuple(),
+        targets={},
+        edge_orientations=[0 for _ in range(n_internal)],
+        labels=[],
+        component_meta=[],
+    )]
+    for component, surface_map in component_payloads:
+        next_partials = []
+        local_to_sub = component['local_to_sub']
+        edge_map = {local_id: sub_id for local_id, sub_id in enumerate(local_to_sub)}
+        basis_sub = set(int(e) for e in component['basis_edges'])
+        for partial in partials:
+            for term in component['bundle'].terms:
+                item = {
+                    'coeff': Fraction(partial['coeff']) * Fraction(component['prefactor_correction']) * Fraction(str(term.prefactor_sign)),
+                    'half_edges': tuple(partial['half_edges']) + tuple(edge_map[int(e)] for e in term.prefactor_half_edges),
+                    'surface_chain': tuple(partial['surface_chain']) + tuple(surface_map[int(sid)] for sid in term.surface_chain),
+                    'numerator_surface_chain': tuple(partial['numerator_surface_chain']) + tuple(surface_map[int(sid)] for sid in term.numerator_surface_chain),
+                    'targets': dict(partial['targets']),
+                    'edge_orientations': list(partial['edge_orientations']),
+                    'labels': list(partial['labels']) + [f"{component['backend']}:{term.orientation_id}"],
+                    'component_meta': list(partial['component_meta']) + [{
+                        'edges': list(component['edges']),
+                        'rank': component['rank'],
+                        'basis_edges': list(component['basis_edges']),
+                        'backend': component['backend'],
+                        'prefactor_correction': component['prefactor_correction'],
+                        'orientation': term.orientation_id,
+                    }],
+                }
+                for local_id, sub_id in edge_map.items():
+                    item['edge_orientations'][int(sub_id)] = int(term.edge_orientations[int(local_id)])
+                    if int(sub_id) in basis_sub:
+                        item['targets'][int(sub_id)] = _remap_linear_expr(term.edge_energy_exprs[int(local_id)], edge_map)
+                next_partials.append(item)
+        partials = next_partials
+
+    terms: List[OrientationTerm] = []
+    global_basis = tuple(
+        edge_id
+        for component in components
+        for edge_id in component['basis_edges']
+    )
+    target_template = [LinearEnergyExpr.zero() for _ in range(n_internal)]
+    for branch, partial in enumerate(partials):
+        if not partial['coeff']:
+            continue
+        targets = list(target_template)
+        for edge_id in global_basis:
+            targets[int(edge_id)] = partial['targets'][int(edge_id)]
+        loop_exprs = solve_loop_energy_from_target_edge_exprs(signatures, global_basis, targets, len(parsed.ext_names))
+        edge_exprs = edge_q0_from_loop_exprs(signatures, loop_exprs, len(parsed.ext_names))
+        edge_orientations = _derive_orientations_from_edge_exprs(edge_exprs)
+        terms.append(OrientationTerm(
+            'lower-cff|' + '|'.join(str(x) for x in partial['labels']),
+            'lower_cff',
+            branch,
+            edge_orientations,
+            _frac_to_str(Fraction(partial['coeff'])),
+            tuple(sorted(int(e) for e in partial['half_edges'])),
+            tuple(int(sid) for sid in partial['surface_chain']),
+            tuple(loop_exprs),
+            tuple(edge_exprs),
+            {
+                'source': 'lower_sector_cff_e_surface_component_product',
+                'component_product': True,
+                'components': list(partial['component_meta']),
+                'global_basis': list(global_basis),
+            },
+            tuple(int(sid) for sid in partial['numerator_surface_chain']),
+        ))
+
+    return ExpressionBundle('lower_cff', tuple(), tuple(), signatures, sb.build(), tuple(terms))
+
+def build_quadratic_general_bounded_cff_bundle(parsed: ParsedGraph, bounds: Tuple[int, ...], report: dict) -> ExpressionBundle:
+    return build_quadratic_recursive_bounded_cff_bundle(parsed, bounds, report, lower_sector_base=False)
+
+def _copy_bundle_surfaces(sb: SurfaceCacheBuilder, bundle: ExpressionBundle, label_prefix: str, edge_map: Optional[Dict[int, int]] = None):
+    edge_map = edge_map or {idx: idx for idx in range(len(bundle.signatures))}
+    return {
+        int(surface.surface_id): sb.intern(
+            surface.kind,
+            _remap_linear_expr(surface.expr, edge_map),
+            f'{label_prefix}:{surface.label}',
+        )
+        for surface in bundle.surface_cache
+    }
+
+def _append_recursive_remainder_terms(
     parsed: ParsedGraph,
     bounds: Tuple[int, ...],
     report: dict,
     sb: SurfaceCacheBuilder,
-    terms: List[OrientationTerm],
+    out_terms: List[OrientationTerm],
     branch: int,
-    pinched_edges: Sequence[int],
+    source_bundle: ExpressionBundle,
+    edge_id: int,
+) -> int:
+    surface_map = _copy_bundle_surfaces(sb, source_bundle, f'qrem{edge_id}')
+    for term in source_bundle.terms:
+        remapped_chain = tuple(int(surface_map[int(sid)]) for sid in term.surface_chain)
+        remapped_num_chain = tuple(int(surface_map[int(sid)]) for sid in term.numerator_surface_chain)
+        for sample_value, sample_pref, sample_half_edges, sample_num_surfaces in _finite_pole_remainder_components(
+            edge_id,
+            term.edge_energy_exprs[int(edge_id)],
+            sb,
+        ):
+            coeff = Fraction(str(term.prefactor_sign)) * Fraction(sample_pref)
+            if not coeff:
+                continue
+            edge_exprs = list(term.edge_energy_exprs)
+            edge_orient = list(term.edge_orientations)
+            edge_exprs[int(edge_id)] = LinearEnergyExpr.E(int(edge_id), int(sample_value))
+            edge_orient[int(edge_id)] = 1 if int(sample_value) > 0 else -1
+            meta = dict(term.meta)
+            meta.update({
+                'source': 'bounded_degree_quadratic_recursive_remainder',
+                'original_source': term.meta.get('source'),
+                'energy_degree_bounds': list(bounds),
+                'energy_divergence': report,
+                'finite_pole_completion': True,
+                'finite_pole_completion_e_surfaces_only': True,
+                'quadratic_remainder_contact_decomposition': True,
+                'quadratic_sector_backend': 'recursive_remainder',
+                'recursive_edge': int(edge_id),
+                'pinched_edges': list(term.meta.get('pinched_edges', [])),
+                'merge_by_numerator_map': True,
+            })
+            out_terms.append(OrientationTerm(
+                f'qrem[{edge_id}]|{term.orientation_id}|e{edge_id}={"+" if sample_value > 0 else "-"}',
+                'bounded_cff',
+                branch,
+                tuple(edge_orient),
+                _frac_to_str(coeff),
+                tuple(sorted(tuple(int(e) for e in term.prefactor_half_edges) + tuple(int(e) for e in sample_half_edges))),
+                remapped_chain,
+                term.loop_energy_exprs,
+                tuple(edge_exprs),
+                meta,
+                tuple(remapped_num_chain + tuple(int(sid) for sid in sample_num_surfaces)),
+            ))
+            branch += 1
+    return branch
+
+def _append_recursive_contact_terms(
+    parsed: ParsedGraph,
+    bounds: Tuple[int, ...],
+    report: dict,
+    sb: SurfaceCacheBuilder,
+    out_terms: List[OrientationTerm],
+    branch: int,
+    source_bundle: ExpressionBundle,
+    edge_id: int,
+    sub_to_orig: Tuple[int, ...],
 ) -> int:
     n_internal = len(parsed.internal_edges)
-    signatures = tuple(e.signature for e in parsed.internal_edges)
-    quadratic_edges = tuple(idx for idx, bound in enumerate(bounds) if int(bound) > 1)
-    pinched = tuple(sorted(int(e) for e in pinched_edges))
-    subparsed, sub_to_orig = _delete_parsed_edges(parsed, pinched)
-    if not subparsed.internal_edges:
-        return branch
-    sub_bounds = tuple(min(int(bounds[orig_id]), 1) for orig_id in sub_to_orig)
-    sector_report = assert_energy_uv_convergent(tuple(e.signature for e in subparsed.internal_edges), sub_bounds)
-    if pinched:
-        sub_bundle = build_pure_ltd_bundle(tuple(e.signature for e in subparsed.internal_edges), len(subparsed.ext_names))
-        sector_backend = 'deleted_ltd_contact_sector'
-    else:
-        sub_bundle = build_pure_cff_bundle(subparsed)
-        sector_backend = 'ordinary_cff_remainder_sector'
+    signatures = tuple(edge.signature for edge in parsed.internal_edges)
     edge_map = {sub_id: orig_id for sub_id, orig_id in enumerate(sub_to_orig)}
-    surface_map = {
-        int(surface.surface_id): sb.intern(
-            surface.kind,
-            _remap_linear_expr(surface.expr, edge_map),
-            f'quad{list(pinched)}:{surface.label}',
-        )
-        for surface in sub_bundle.surface_cache
-    }
-    for term in sub_bundle.terms:
+    surface_map = _copy_bundle_surfaces(sb, source_bundle, f'qcontact{edge_id}', edge_map)
+    for term in source_bundle.terms:
         full_loop_exprs = tuple(_remap_linear_expr(expr, edge_map) for expr in term.loop_energy_exprs)
         current_edge_exprs = edge_q0_from_loop_exprs(signatures, full_loop_exprs, len(parsed.ext_names))
         base_edge_exprs = [LinearEnergyExpr.zero() for _ in range(n_internal)]
@@ -1390,85 +1765,89 @@ def _lift_deleted_ltd_quadratic_sector_terms(
         remapped_half_edges = tuple(int(edge_map[int(e)]) for e in term.prefactor_half_edges)
         remapped_chain = tuple(int(surface_map[int(sid)]) for sid in term.surface_chain)
         remapped_num_chain = tuple(int(surface_map[int(sid)]) for sid in term.numerator_surface_chain)
-
-        per_edge_choices = []
-        active_quadratic_edges = []
-        pinched_set = set(pinched)
-        for edge_id in quadratic_edges:
-            active_quadratic_edges.append(int(edge_id))
-            if edge_id in pinched_set:
-                per_edge_choices.append(_finite_pole_contact_components(edge_id, bounds[int(edge_id)], current_edge_exprs[int(edge_id)], sb))
-            else:
-                per_edge_choices.append(_finite_pole_remainder_components(edge_id, current_edge_exprs[int(edge_id)], sb))
-        sample_iter = itertools.product(*per_edge_choices) if per_edge_choices else [tuple()]
-        for sample in sample_iter:
-            coeff = Fraction(str(term.prefactor_sign))
-            sample_label_parts = []
-            edge_exprs = list(base_edge_exprs)
-            edge_orient = list(full_orient)
-            extra_half_edges: List[int] = []
-            extra_num_surfaces: List[int] = []
-            for edge_id, (sample_value, sample_pref, sample_half_edges, sample_num_surfaces) in zip(active_quadratic_edges, sample):
-                coeff *= Fraction(sample_pref)
-                extra_half_edges.extend(int(e) for e in sample_half_edges)
-                extra_num_surfaces.extend(int(sid) for sid in sample_num_surfaces)
-                if sample_value == 0:
-                    edge_exprs[int(edge_id)] = LinearEnergyExpr.zero()
-                    edge_orient[int(edge_id)] = 0
-                    sample_label_parts.append(f'e{edge_id}=0')
-                else:
-                    edge_exprs[int(edge_id)] = LinearEnergyExpr.E(int(edge_id), int(sample_value))
-                    edge_orient[int(edge_id)] = 1 if int(sample_value) > 0 else -1
-                    sample_label_parts.append(f'e{edge_id}={"+" if sample_value == 1 else "-" if sample_value == -1 else sample_value}')
+        for sample_value, sample_pref, sample_half_edges, sample_num_surfaces in _finite_pole_contact_components(
+            edge_id,
+            bounds[int(edge_id)],
+            current_edge_exprs[int(edge_id)],
+            sb,
+        ):
+            coeff = Fraction(str(term.prefactor_sign)) * Fraction(sample_pref)
             if not coeff:
                 continue
-            if pinched:
-                label = 'qpinch[' + ','.join(str(e) for e in pinched) + ']'
+            edge_exprs = list(base_edge_exprs)
+            edge_orient = list(full_orient)
+            if sample_value == 0:
+                edge_exprs[int(edge_id)] = LinearEnergyExpr.zero()
+                edge_orient[int(edge_id)] = 0
+                sample_label = '0'
             else:
-                label = f'cff-rem|{term.orientation_id}'
-            if sample_label_parts:
-                label += '|' + '|'.join(sample_label_parts)
-            if pinched:
-                label += f'|ltd={term.orientation_id}'
+                edge_exprs[int(edge_id)] = LinearEnergyExpr.E(int(edge_id), int(sample_value))
+                edge_orient[int(edge_id)] = 1 if int(sample_value) > 0 else -1
+                sample_label = '+' if sample_value > 0 else '-'
+            pinched_edges = sorted(set(int(x) for x in term.meta.get('pinched_edges', [])) | {int(edge_id)})
             meta = dict(term.meta)
             meta.update({
-                'source': 'bounded_degree_quadratic_sector',
+                'source': 'bounded_degree_quadratic_recursive_contact',
                 'original_source': term.meta.get('source'),
                 'energy_degree_bounds': list(bounds),
                 'energy_divergence': report,
-                'sector_energy_divergence': sector_report,
                 'finite_pole_completion': True,
-                'finite_pole_completion_e_surfaces_only': False,
+                'finite_pole_completion_e_surfaces_only': True,
                 'quadratic_remainder_contact_decomposition': True,
-                'quadratic_sector_backend': sector_backend,
-                'pinched_edges': list(pinched),
+                'quadratic_sector_backend': 'recursive_contact_cff_e_only',
+                'recursive_edge': int(edge_id),
+                'pinched_edges': pinched_edges,
                 'deleted_edge_map': list(sub_to_orig),
                 'merge_by_numerator_map': True,
             })
-            terms.append(OrientationTerm(
-                label,
+            out_terms.append(OrientationTerm(
+                f'qcontact[{edge_id}]|{term.orientation_id}|e{edge_id}={sample_label}',
                 'bounded_cff',
                 branch,
                 tuple(edge_orient),
                 _frac_to_str(coeff),
-                tuple(sorted(remapped_half_edges + tuple(extra_half_edges))),
+                tuple(sorted(remapped_half_edges + tuple(int(e) for e in sample_half_edges))),
                 remapped_chain,
                 full_loop_exprs,
                 tuple(edge_exprs),
                 meta,
-                tuple(remapped_num_chain + tuple(extra_num_surfaces)),
+                tuple(remapped_num_chain + tuple(int(sid) for sid in sample_num_surfaces)),
             ))
             branch += 1
     return branch
 
-def build_quadratic_general_bounded_cff_bundle(parsed: ParsedGraph, bounds: Tuple[int, ...], report: dict) -> ExpressionBundle:
-    quadratic_edges = tuple(idx for idx, bound in enumerate(bounds) if int(bound) > 1)
+def build_quadratic_recursive_bounded_cff_bundle(
+    parsed: ParsedGraph,
+    bounds: Tuple[int, ...],
+    report: dict,
+    lower_sector_base: bool,
+) -> ExpressionBundle:
+    bounds = tuple(int(x) for x in bounds)
+    next_edge = next((idx for idx, bound in enumerate(bounds) if int(bound) > 1), None)
+    if next_edge is None:
+        return build_lower_sector_cff_bundle(parsed) if lower_sector_base else build_pure_cff_bundle(parsed)
+
     sb = SurfaceCacheBuilder()
     terms: List[OrientationTerm] = []
     branch = 0
-    for r in range(len(quadratic_edges) + 1):
-        for pinched in itertools.combinations(quadratic_edges, r):
-            branch = _lift_deleted_ltd_quadratic_sector_terms(parsed, bounds, report, sb, terms, branch, pinched)
+
+    rem_bounds = list(bounds)
+    rem_bounds[int(next_edge)] = 1
+    rem_bundle = build_quadratic_recursive_bounded_cff_bundle(parsed, tuple(rem_bounds), report, lower_sector_base)
+    branch = _append_recursive_remainder_terms(parsed, bounds, report, sb, terms, branch, rem_bundle, int(next_edge))
+
+    subparsed, sub_to_orig = _delete_parsed_edges(parsed, (int(next_edge),))
+    if subparsed.internal_edges:
+        sub_bounds = tuple(int(bounds[orig_id]) for orig_id in sub_to_orig)
+        sector_report = assert_energy_uv_convergent(tuple(edge.signature for edge in subparsed.internal_edges), sub_bounds)
+        contact_bundle = build_quadratic_recursive_bounded_cff_bundle(
+            subparsed,
+            sub_bounds,
+            sector_report,
+            lower_sector_base=True,
+        )
+        branch = _append_recursive_contact_terms(parsed, bounds, report, sb, terms, branch, contact_bundle, int(next_edge), sub_to_orig)
+
     enriched = []
     for idx, term in enumerate(terms):
         enriched.append(OrientationTerm(
@@ -1484,7 +1863,7 @@ def build_quadratic_general_bounded_cff_bundle(parsed: ParsedGraph, bounds: Tupl
             term.meta,
             term.numerator_surface_chain,
         ))
-    return ExpressionBundle('bounded_cff', tuple(), tuple(), tuple(e.signature for e in parsed.internal_edges), sb.build(), tuple(enriched))
+    return ExpressionBundle('bounded_cff', tuple(), tuple(), tuple(edge.signature for edge in parsed.internal_edges), sb.build(), tuple(enriched))
 
 def build_bounded_degree_cff_bundle(parsed, energy_degree_bounds):
     signatures = tuple(e.signature for e in parsed.internal_edges)

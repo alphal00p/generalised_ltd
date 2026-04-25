@@ -129,6 +129,15 @@ def _edge_energy_monomial(bounds):
 def _edge_map_key(orient):
     return tuple(json.dumps(expr, sort_keys=True) for expr in orient['edge_q0'])
 
+def _denominator_surface_kinds(data):
+    out = set()
+    surface_kinds = {int(surface['id']): surface['k'] for surface in data['surfaces']}
+    for orient in data['orientations']:
+        for variant in orient.get('variants', []):
+            for node in variant['tree']['nodes']:
+                out.update(surface_kinds[int(surface_id)] for surface_id in node.get('surfaces', []))
+    return out
+
 def assert_unique_edge_numerator_maps(data):
     seen = set()
     for orient in data['orientations']:
@@ -599,6 +608,7 @@ def test_bounded_degree_cff_matches_ltd_for_multiloop_quadratic_combinations(nam
     cff_data = build_structure(split_dot, 'cff', energy_degree_bounds=bounds)
     ltd_data = build_structure(split_dot, 'ltd')
     assert cff_data['backend'] == 'bounded_degree_bundle'
+    assert _denominator_surface_kinds(cff_data) <= {'e'}
     assert any(
         var['meta'].get('quadratic_remainder_contact_decomposition')
         for orient in cff_data['orientations']
@@ -609,6 +619,27 @@ def test_bounded_degree_cff_matches_ltd_for_multiloop_quadratic_combinations(nam
     cff = evaluate_structure(cff_data, split_dot, ext4, loop3, numerator, 80, split_masses)
     ltd = evaluate_structure(ltd_data, split_dot, ext4, loop3, numerator, 80, split_masses)
     assert abs(cff - ltd) < mp.mpf('1e-65'), (name, bounds, cff, ltd)
+
+@pytest.mark.parametrize('name,masses,bounds', [
+    ('sunrise_pow4.dot', ALL_MASSES, {0: 2}),
+    ('proper_iterated_sandwiched_bubble.dot', ITER_MASSES, {0: 2, 1: 2, 2: 2}),
+    ('four_loop_stress.dot', FOUR_LOOP_STRESS_MASSES, {0: 2, 1: 2}),
+])
+def test_bounded_degree_cff_matches_ltd_for_multiloop_squared_dot_numerators(name, masses, bounds):
+    d = dot(name)
+    parsed = GIO.parse_dot_graph(d)
+    split_dot, _ = GIO.build_split_mass_dot(d)
+    ext4, loop3, default_masses = __import__('hybrid3d_core.api').api._random_default_inputs(split_dot, 1337)
+    split_masses = GIO.build_split_mass_assignments(parsed, {**default_masses, **masses}, '0.001')
+    cff_data = build_structure(split_dot, 'cff', energy_degree_bounds=bounds)
+    ltd_data = build_structure(split_dot, 'ltd')
+    assert _denominator_surface_kinds(cff_data) <= {'e'}
+
+    for edge_id in sorted(bounds):
+        numerator = f'dot(edges[{edge_id}], ext[0])**2'
+        cff = evaluate_structure(cff_data, split_dot, ext4, loop3, numerator, 80, split_masses)
+        ltd = evaluate_structure(ltd_data, split_dot, ext4, loop3, numerator, 80, split_masses)
+        assert abs(cff - ltd) < mp.mpf('1e-65'), (name, numerator, cff, ltd)
 
 def test_normal_box_bounded_degree_cff_matches_ltd_for_all_convergent_edge_power_bounds():
     d = dot('box.dot')
