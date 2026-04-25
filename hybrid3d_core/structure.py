@@ -96,6 +96,10 @@ def _variant_origin_label(label: str, meta: Dict[str, Any]) -> str:
     label_s = str(label)
     if label_s.startswith('cff|'):
         return 'cff'
+    if label_s.startswith('cff-rem|'):
+        return 'cff-rem'
+    if label_s.startswith('qpinch['):
+        return label_s.split('|ltd=', 1)[0]
     if label_s.startswith('pinch['):
         return label_s.split('|cff=', 1)[0]
     source = str(meta.get('source', ''))

@@ -1118,6 +1118,44 @@ def _finite_pole_contact_components(
                 components.append((int(sample), pref, half_edges, num_surfaces))
     return tuple(components)
 
+def _finite_pole_remainder_components(
+    edge_id: int,
+    current_expr: LinearEnergyExpr,
+    sb: SurfaceCacheBuilder,
+) -> Tuple[Tuple[int, Fraction, Tuple[int, ...], Tuple[int, ...]], ...]:
+    plus = sb.intern('auto', (current_expr + LinearEnergyExpr.E(edge_id, 1)).canonical(), f'remainder-plus-q{edge_id}')
+    minus = sb.intern('auto', (LinearEnergyExpr.E(edge_id, 1) - current_expr).canonical(), f'remainder-minus-q{edge_id}')
+    return (
+        (1, Fraction(1), (int(edge_id),), (int(plus),)),
+        (-1, Fraction(1), (int(edge_id),), (int(minus),)),
+    )
+
+def _delete_parsed_edges(parsed: ParsedGraph, pinched_edges: Sequence[int]) -> Tuple[ParsedGraph, Tuple[int, ...]]:
+    pinched = {int(e) for e in pinched_edges}
+    sub_to_orig: List[int] = []
+    internal_edges = []
+    for edge in parsed.internal_edges:
+        if edge.edge_id in pinched:
+            continue
+        sub_id = len(internal_edges)
+        sub_to_orig.append(int(edge.edge_id))
+        internal_edges.append(type(edge)(
+            sub_id,
+            edge.tail,
+            edge.head,
+            edge.label,
+            edge.mass_key,
+            edge.signature,
+            edge.had_pow,
+        ))
+    return ParsedGraph(
+        tuple(internal_edges),
+        parsed.external_edges,
+        parsed.loop_names,
+        parsed.ext_names,
+        parsed.node_name_to_internal,
+    ), tuple(sub_to_orig)
+
 def _contract_parsed_edges(parsed: ParsedGraph, pinched_edges: Sequence[int]) -> Tuple[ParsedGraph, Tuple[int, ...]]:
     pinched = {int(e) for e in pinched_edges}
     parent = {int(v): int(v) for v in parsed.node_name_to_internal.values()}
@@ -1308,6 +1346,146 @@ def build_quadratic_e_surface_bounded_cff_bundle(parsed: ParsedGraph, bounds: Tu
         ))
     return ExpressionBundle('bounded_cff', tuple(), tuple(), tuple(e.signature for e in parsed.internal_edges), sb.build(), tuple(enriched))
 
+def _lift_deleted_ltd_quadratic_sector_terms(
+    parsed: ParsedGraph,
+    bounds: Tuple[int, ...],
+    report: dict,
+    sb: SurfaceCacheBuilder,
+    terms: List[OrientationTerm],
+    branch: int,
+    pinched_edges: Sequence[int],
+) -> int:
+    n_internal = len(parsed.internal_edges)
+    signatures = tuple(e.signature for e in parsed.internal_edges)
+    quadratic_edges = tuple(idx for idx, bound in enumerate(bounds) if int(bound) > 1)
+    pinched = tuple(sorted(int(e) for e in pinched_edges))
+    subparsed, sub_to_orig = _delete_parsed_edges(parsed, pinched)
+    if not subparsed.internal_edges:
+        return branch
+    sub_bounds = tuple(min(int(bounds[orig_id]), 1) for orig_id in sub_to_orig)
+    sector_report = assert_energy_uv_convergent(tuple(e.signature for e in subparsed.internal_edges), sub_bounds)
+    if pinched:
+        sub_bundle = build_pure_ltd_bundle(tuple(e.signature for e in subparsed.internal_edges), len(subparsed.ext_names))
+        sector_backend = 'deleted_ltd_contact_sector'
+    else:
+        sub_bundle = build_pure_cff_bundle(subparsed)
+        sector_backend = 'ordinary_cff_remainder_sector'
+    edge_map = {sub_id: orig_id for sub_id, orig_id in enumerate(sub_to_orig)}
+    surface_map = {
+        int(surface.surface_id): sb.intern(
+            surface.kind,
+            _remap_linear_expr(surface.expr, edge_map),
+            f'quad{list(pinched)}:{surface.label}',
+        )
+        for surface in sub_bundle.surface_cache
+    }
+    for term in sub_bundle.terms:
+        full_loop_exprs = tuple(_remap_linear_expr(expr, edge_map) for expr in term.loop_energy_exprs)
+        current_edge_exprs = edge_q0_from_loop_exprs(signatures, full_loop_exprs, len(parsed.ext_names))
+        base_edge_exprs = [LinearEnergyExpr.zero() for _ in range(n_internal)]
+        full_orient = [0 for _ in range(n_internal)]
+        for sub_id, orig_id in enumerate(sub_to_orig):
+            base_edge_exprs[int(orig_id)] = _remap_linear_expr(term.edge_energy_exprs[sub_id], edge_map)
+            full_orient[int(orig_id)] = int(term.edge_orientations[sub_id])
+        remapped_half_edges = tuple(int(edge_map[int(e)]) for e in term.prefactor_half_edges)
+        remapped_chain = tuple(int(surface_map[int(sid)]) for sid in term.surface_chain)
+        remapped_num_chain = tuple(int(surface_map[int(sid)]) for sid in term.numerator_surface_chain)
+
+        per_edge_choices = []
+        active_quadratic_edges = []
+        pinched_set = set(pinched)
+        for edge_id in quadratic_edges:
+            active_quadratic_edges.append(int(edge_id))
+            if edge_id in pinched_set:
+                per_edge_choices.append(_finite_pole_contact_components(edge_id, bounds[int(edge_id)], current_edge_exprs[int(edge_id)], sb))
+            else:
+                per_edge_choices.append(_finite_pole_remainder_components(edge_id, current_edge_exprs[int(edge_id)], sb))
+        sample_iter = itertools.product(*per_edge_choices) if per_edge_choices else [tuple()]
+        for sample in sample_iter:
+            coeff = Fraction(str(term.prefactor_sign))
+            sample_label_parts = []
+            edge_exprs = list(base_edge_exprs)
+            edge_orient = list(full_orient)
+            extra_half_edges: List[int] = []
+            extra_num_surfaces: List[int] = []
+            for edge_id, (sample_value, sample_pref, sample_half_edges, sample_num_surfaces) in zip(active_quadratic_edges, sample):
+                coeff *= Fraction(sample_pref)
+                extra_half_edges.extend(int(e) for e in sample_half_edges)
+                extra_num_surfaces.extend(int(sid) for sid in sample_num_surfaces)
+                if sample_value == 0:
+                    edge_exprs[int(edge_id)] = LinearEnergyExpr.zero()
+                    edge_orient[int(edge_id)] = 0
+                    sample_label_parts.append(f'e{edge_id}=0')
+                else:
+                    edge_exprs[int(edge_id)] = LinearEnergyExpr.E(int(edge_id), int(sample_value))
+                    edge_orient[int(edge_id)] = 1 if int(sample_value) > 0 else -1
+                    sample_label_parts.append(f'e{edge_id}={"+" if sample_value == 1 else "-" if sample_value == -1 else sample_value}')
+            if not coeff:
+                continue
+            if pinched:
+                label = 'qpinch[' + ','.join(str(e) for e in pinched) + ']'
+            else:
+                label = f'cff-rem|{term.orientation_id}'
+            if sample_label_parts:
+                label += '|' + '|'.join(sample_label_parts)
+            if pinched:
+                label += f'|ltd={term.orientation_id}'
+            meta = dict(term.meta)
+            meta.update({
+                'source': 'bounded_degree_quadratic_sector',
+                'original_source': term.meta.get('source'),
+                'energy_degree_bounds': list(bounds),
+                'energy_divergence': report,
+                'sector_energy_divergence': sector_report,
+                'finite_pole_completion': True,
+                'finite_pole_completion_e_surfaces_only': False,
+                'quadratic_remainder_contact_decomposition': True,
+                'quadratic_sector_backend': sector_backend,
+                'pinched_edges': list(pinched),
+                'deleted_edge_map': list(sub_to_orig),
+                'merge_by_numerator_map': True,
+            })
+            terms.append(OrientationTerm(
+                label,
+                'bounded_cff',
+                branch,
+                tuple(edge_orient),
+                _frac_to_str(coeff),
+                tuple(sorted(remapped_half_edges + tuple(extra_half_edges))),
+                remapped_chain,
+                full_loop_exprs,
+                tuple(edge_exprs),
+                meta,
+                tuple(remapped_num_chain + tuple(extra_num_surfaces)),
+            ))
+            branch += 1
+    return branch
+
+def build_quadratic_general_bounded_cff_bundle(parsed: ParsedGraph, bounds: Tuple[int, ...], report: dict) -> ExpressionBundle:
+    quadratic_edges = tuple(idx for idx, bound in enumerate(bounds) if int(bound) > 1)
+    sb = SurfaceCacheBuilder()
+    terms: List[OrientationTerm] = []
+    branch = 0
+    for r in range(len(quadratic_edges) + 1):
+        for pinched in itertools.combinations(quadratic_edges, r):
+            branch = _lift_deleted_ltd_quadratic_sector_terms(parsed, bounds, report, sb, terms, branch, pinched)
+    enriched = []
+    for idx, term in enumerate(terms):
+        enriched.append(OrientationTerm(
+            term.orientation_id,
+            term.family,
+            idx,
+            term.edge_orientations,
+            term.prefactor_sign,
+            term.prefactor_half_edges,
+            term.surface_chain,
+            term.loop_energy_exprs,
+            term.edge_energy_exprs,
+            term.meta,
+            term.numerator_surface_chain,
+        ))
+    return ExpressionBundle('bounded_cff', tuple(), tuple(), tuple(e.signature for e in parsed.internal_edges), sb.build(), tuple(enriched))
+
 def build_bounded_degree_cff_bundle(parsed, energy_degree_bounds):
     signatures = tuple(e.signature for e in parsed.internal_edges)
     bounds = normalize_energy_degree_bounds(energy_degree_bounds, len(signatures))
@@ -1336,25 +1514,51 @@ def build_bounded_degree_cff_bundle(parsed, energy_degree_bounds):
             ))
         return ExpressionBundle(bundle.family, bundle.loop_names, bundle.ext_names, bundle.signatures, bundle.surface_cache, tuple(terms))
 
+    high_edges = [idx for idx, bound in enumerate(bounds) if int(bound) > 2]
+    if repeated_groups(parsed):
+        bundle = build_hybrid_bundle_raw(parsed, energy_degree_bounds=bounds)
+        terms = []
+        for idx, term in enumerate(bundle.terms):
+            meta = dict(term.meta)
+            meta['source'] = 'bounded_degree_repeated_cff_confluent_limit'
+            meta['original_source'] = term.meta.get('source')
+            meta['energy_degree_bounds'] = list(bounds)
+            meta['energy_divergence'] = report
+            meta['merge_by_numerator_map'] = True
+            terms.append(OrientationTerm(
+                term.orientation_id,
+                'bounded_cff',
+                idx,
+                term.edge_orientations,
+                term.prefactor_sign,
+                term.prefactor_half_edges,
+                term.surface_chain,
+                term.loop_energy_exprs,
+                term.edge_energy_exprs,
+                meta,
+                term.numerator_surface_chain,
+            ))
+        return ExpressionBundle('bounded_cff', tuple(), tuple(), signatures, bundle.surface_cache, tuple(terms))
+
     if (
         len(parsed.loop_names) == 1
-        and not repeated_groups(parsed)
     ):
-        high_edges = [idx for idx, bound in enumerate(bounds) if int(bound) > 2]
         if high_edges:
             isolated_cubic = len(high_edges) == 1 and int(bounds[high_edges[0]]) == 3 and sum(int(x) for x in bounds) == 3
             if not isolated_cubic:
                 raise NotImplementedError(
-                    'The E-surface-only bounded CFF lift currently supports arbitrary quadratic caps '
-                    'and isolated single-edge cubic caps.  Higher caps or mixed cubic sectors need the '
-                    'next recursive reduction of known numerator-side polynomial factors.'
+                    'The bounded CFF lift supports arbitrary quadratic caps.  Higher caps or mixed '
+                    'cubic sectors need the next recursive reduction of known numerator-side '
+                    'polynomial factors.'
                 )
         return build_quadratic_e_surface_bounded_cff_bundle(parsed, bounds, report)
 
+    if not high_edges:
+        return build_quadratic_general_bounded_cff_bundle(parsed, bounds, report)
+
     raise NotImplementedError(
-        'Bounded-degree pure CFF without the LTD-contact fallback is currently implemented '
-        'for one-loop non-repeated graphs only.  Use split masses or lower the bounds for '
-        'this topology until the multiloop/repeated causal pinch lift is implemented.'
+        'Bounded-degree pure CFF supports arbitrary quadratic caps.  Higher caps in multiloop '
+        'or repeated sectors need the recursive known-polynomial contact lift.'
     )
 
 def build_pure_ltd_bundle(signatures,n_external_symbols=None):

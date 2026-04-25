@@ -115,6 +115,13 @@ Current exact bounded-degree support:
   residue-basis energy coordinates.
 - `cff`: one-loop non-repeated graphs support arbitrary quadratic-or-lower caps
   with only regular `E`-surfaces in denominators.
+- `cff`: multiloop and split-repeated graphs support arbitrary quadratic-or-lower
+  caps by summing finite-pole remainder/contact sectors.  Contact sectors are
+  exact JSON terms but may contain lower-sector LTD `H`-surfaces in the
+  denominator.
+- `cff`: unsplit repeated-propagator graphs with quadratic caps use the
+  confluent repeated-pole limit also used by bounded `hybrid`, avoiding singular
+  equal-mass contact denominators.
 - `cff`: isolated single-edge cubic caps are supported.
 
 Unsupported bounded CFF cases raise `NotImplementedError`; the old
@@ -122,11 +129,12 @@ Unsupported bounded CFF cases raise `NotImplementedError`; the old
 
 The main open distinction is quadratic versus genuinely higher power.  Quadratic
 contacts produce only the three black-box samples `+E`, `0`, `-E` and no known
-polynomial numerator residue, so arbitrary quadratic combinations are the next
-tractable pure-CFF extension once the multiloop CFF contact minor is fixed.
+polynomial numerator residue, so arbitrary quadratic combinations are now
+implemented.  The remaining representational improvement is replacing the
+multiloop lower LTD contact trees by fully E-surface-only CFF causal minors.
 Cubic, quartic, and mixed higher caps produce known numerator-side polynomial
 factors after a pinch; those factors must be recursively reduced before the
-result can again be serialized as an E-surface CFF denominator tree.
+result can again be serialized.
 
 ## Tests
 

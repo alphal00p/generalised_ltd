@@ -692,11 +692,8 @@ recursive decomposition
 \]
 where \(R_eN\) is the affine remainder in \(q_e^0\).  The first term keeps edge
 \(e\) and is ordinary CFF-safe in that variable.  The second term cancels the
-propagator and is evaluated on the graph obtained by contracting edge \(e\).
-Iterating \eqref{eq:finite-pole-division} gives a pinch forest: each forest node
-is an ordinary CFF expression on a contracted subgraph.  Hence all denominator
-surfaces can in principle be regular CFF \(E\)-surfaces; no LTD \(H\)-surface is
-intrinsic to the finite-pole completion.
+propagator and is evaluated on the lower denominator set with edge \(e\)
+deleted.  Iterating \eqref{eq:finite-pole-division} gives a pinch forest.
 
 For the special but important bound \(d_e\le2\), this division is particularly
 simple.  The quotient \(C_eN\) is independent of \(q_e^0\) and can be reconstructed
@@ -717,19 +714,39 @@ tensor product of the three-point weights
   w_e=1,\;-2,\;1,
   \qquad e\in S,
 \]
-together with one factor \(1/(2\omega_e^2)\) per pinched edge.  In the existing
-JSON this can be represented without new evaluator semantics by adding two
-\texttt{half\_edges} entries for each pinched edge and multiplying the rational
-\texttt{pref} by \(2w_e\).  The denominator tree itself is the ordinary CFF tree
-of the contracted subgraph, lifted back to the original edge labels.  Terminal
-one-denominator sectors are kept in the same JSON language by inserting a cached
-unit \(E\)-surface; the non-trivial factor is then only the half-edge Jacobian and
-the numerator sample.  This is the first fully causal bounded-degree completion
-implemented in the prototype.  The current implementation enables the one-loop
-non-repeated subcase with arbitrary numbers of quadratic-or-lower edge bounds.
-Multiloop pinches require a more careful choice of contracted CFF graph and
-loop-energy basis before this lifting is safe, and higher-order contacts require
-the numerator-side surface weights described below.
+together with one factor \(1/(2\omega_e^2)\) per pinched edge.  Edges with
+quadratic bounds that are not pinched must still be replaced by their affine
+remainders,
+\[
+  R_eN(q_e^0)
+  =
+  \frac{q_e^0+\omega_e}{2\omega_e}\,N(+\omega_e)
+  +
+  \frac{\omega_e-q_e^0}{2\omega_e}\,N(-\omega_e).
+\]
+The JSON representation uses ordinary numerator samples for the \(N(\pm
+\omega_e)\) and \(N(0)\) calls.  The factors \(q_e^0+\omega_e\) and
+\(\omega_e-q_e^0\) are cached as numerator-side surfaces, while the factors
+\((2\omega_e)^{-1}\) and \((2\omega_e)^{-2}\) are encoded by repeated
+\texttt{half\_edges}.  Thus one orientation still corresponds to one numerator
+energy map.
+
+For one-loop non-repeated graphs, the builder keeps the compact E-surface-only
+CFF contact completion.  For multiloop graphs and split repeated graphs, the
+current exact implementation builds each deleted lower sector with the LTD
+residue tree and lifts it back to the CFF JSON as a contact variant.  This means
+multiloop quadratic CFF mode is now exact and JSON-driven, but contact variants
+may contain \(H\)-class denominator surfaces.  This is not the older
+\(\CFF+(\LTD-\CFF)\) fallback: every term comes from the finite-pole
+\(R/C\)-decomposition above, and each sector is checked for loop-energy UV
+convergence before it is emitted.
+
+If the input graph itself contains unsplit repeated propagators, bounded
+quadratic \texttt{cff} mode uses the same confluent repeated-pole limit as the
+bounded hybrid builder.  The split-mass pure-CFF lane remains available for
+testing the distinct-mass CFF representation directly; the unsplit lane is made
+finite by the confluent limit rather than by emitting singular equal-mass
+contact denominators.
 
 The same division also explains what is required for \(d_e>2\).  Let
 \(d=d_e\), choose \(d-1\) non-pole interpolation nodes
@@ -764,14 +781,16 @@ finite-pole division before ordinary CFF is valid on the contracted graph.
 The implementation therefore deliberately emits only the cases that are
 currently causal and tested on the pure-CFF side:
 \begin{itemize}[leftmargin=2em]
-  \item one-loop non-repeated graphs with arbitrary quadratic-or-lower caps;
+  \item arbitrary combinations of quadratic-or-lower caps on any topology whose
+        finite-pole sectors pass the loop-energy UV checks;
+  \item unsplit repeated-propagator inputs through the same confluent
+        repeated-pole limit used by bounded hybrid mode;
   \item isolated single-edge cubic caps;
-  \item no LTD-contact fallback.
+  \item no \(\CFF+(\LTD-\CFF)\) fallback.
 \end{itemize}
-Unsupported higher contacts and multiloop CFF pinches raise an implementation
-error instead of serializing
-\(\CFF+(\LTD-\CFF)\).  This is intentional: that fallback is a useful numerical
-identity but not the desired E-surface-only CFF representation.
+Unsupported higher contacts still raise an implementation error.  The remaining
+open problem is the fully E-surface-only multiloop contact minor; the exact
+quadratic implementation uses lower LTD trees for those contact variants.
 
 The repeated-channel hybrid builder has a separate bounded-degree path.  It
 keeps the confluent residue formula and reconstructs numerator derivatives by
@@ -821,20 +840,18 @@ denominator formula and replaces numerator derivatives by finite samples.
 The quadratic case \(d_e\le2\) is special and substantially easier.  The quotient
 \eqref{eq:quadratic-contact} is independent of \(q_e^0\), so no known
 polynomial factor is produced by a quadratic contact.  Arbitrary combinations of
-quadratic-powered edges should therefore be attainable without the recursive
-polynomial-weight machinery.  What remains is the correct multiloop contact
-operation: after several edges are pinched, the CFF denominator tree must be
-built on the right causal minor, with a loop-energy basis for which the finite
-part has no residue at infinity.  Naive contraction and naive deletion are not
-equivalent to this operation in general.  This is why the current public builder
-keeps the multiloop guard even though the one-loop quadratic formula is already
-implemented and tested.
+quadratic-powered edges are therefore implemented by summing all \(R/C\) choices
+for the bounded edges.  The one-loop non-repeated subcase remains
+E-surface-only.  In multiloop contact sectors the current exact construction
+uses deleted lower LTD trees, so it may contain denominator \(H\)-surfaces.  A
+fully CFF-causal multiloop contact minor would replace those lower LTD trees by
+E-surface-only CFF trees, but that is now an optimization of the representation
+rather than a blocker for correctness.
 
 The remaining pure-CFF implementation order is therefore:
 \begin{enumerate}[leftmargin=2em]
-  \item complete the pure-CFF quadratic contact lift for arbitrary convergent
-        combinations of quadratic edges, validating every sector directly
-        against LTD;
+  \item replace deleted lower LTD trees in multiloop quadratic contact variants
+        by a fully E-surface-only CFF causal-minor construction;
   \item add the recursive known-polynomial sector algebra needed for cubic,
         quartic, and mixed higher-power caps.
 \end{enumerate}
