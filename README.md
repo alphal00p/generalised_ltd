@@ -253,9 +253,10 @@ Current exact bounded-degree support:
   decomposed into loop-energy matroid components and rebuilt as auxiliary CFF
   causal minors, so denominator surfaces remain `E`-only; numerator-side cached
   surfaces may still be `E` or `H`.
-- `cff`: unsplit repeated-propagator graphs with quadratic caps use the
-  confluent repeated-pole limit also used by bounded `hybrid`, avoiding singular
-  equal-mass contact denominators.
+- `cff`: unsplit repeated-propagator graphs with non-affine caps are currently
+  rejected.  The previous fallback reused the bounded `hybrid` confluent limit,
+  which is correct as a hybrid representation but can place `H`-surfaces in
+  denominators and therefore is not an `E`-surface-only pure CFF expression.
 - `cff`: isolated single-edge cubic caps are supported.
 
 Unsupported bounded CFF cases raise `NotImplementedError`; the old

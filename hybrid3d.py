@@ -344,7 +344,15 @@ def cmd_graph_from_signatures(args):
 
 def cmd_build(args):
     dot = load_dot_graph(args.dot)
-    data = build_structure(dot, args.family, energy_degree_bounds=parse_energy_degree_bounds(getattr(args, 'energy_degree_bounds', None)))
+    try:
+        data = build_structure(
+            dot,
+            args.family,
+            energy_degree_bounds=parse_energy_degree_bounds(getattr(args, 'energy_degree_bounds', None)),
+        )
+    except NotImplementedError as exc:
+        print(f'error: {exc}', file=sys.stderr)
+        raise SystemExit(2)
     txt = json.dumps(data, indent=2)
     if args.json_out:
         pathlib.Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)

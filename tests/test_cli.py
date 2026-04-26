@@ -1318,18 +1318,12 @@ def test_bounded_degree_cff_repairs_known_quadratic_cff_ltd_mismatch():
     assert abs(ordinary - ltd) > mp.mpf('1e-3')
     assert abs(bounded - ltd) < mp.mpf('1e-65')
 
-def test_bounded_degree_cff_on_repeated_graph_uses_finite_confluent_limit():
+def test_bounded_degree_cff_rejects_unsplit_repeated_quadratic_bounds():
     d = dot('box_pow3.dot')
-    ext4, loop3, default_masses = __import__('src.api').api._random_default_inputs(d, 1337)
-    masses = {**default_masses, **BOX_MASSES}
-    bounds = {3: 2}
-    numerator = 'edges[3][0]**2'
-    cff = build_structure(d, 'cff', energy_degree_bounds=bounds)
-    hybrid = build_structure(d, 'hybrid', energy_degree_bounds=bounds)
-    assert cff['orientations'][0]['meta']['source'] == 'bounded_degree_repeated_cff_confluent_limit'
-    cff_val = evaluate_structure(cff, d, ext4, loop3, numerator, 80, masses)
-    hybrid_val = evaluate_structure(hybrid, d, ext4, loop3, numerator, 80, masses)
-    assert abs(cff_val - hybrid_val) < mp.mpf('1e-65')
+    with pytest.raises(NotImplementedError, match='unsplit repeated-propagator graphs'):
+        build_structure(d, 'cff', energy_degree_bounds={3: 2})
+    with pytest.raises(NotImplementedError, match='unsplit repeated-propagator graphs'):
+        build_structure(d, 'cff', energy_degree_bounds={0: 1, 1: 1, 2: 1, 3: 2})
 
 def test_bounded_degree_cff_rejects_nonconvergent_energy_bounds():
     split_dot = dot('box.dot')

@@ -1895,29 +1895,11 @@ def build_bounded_degree_cff_bundle(parsed, energy_degree_bounds):
 
     high_edges = [idx for idx, bound in enumerate(bounds) if int(bound) > 2]
     if repeated_groups(parsed):
-        bundle = build_hybrid_bundle_raw(parsed, energy_degree_bounds=bounds)
-        terms = []
-        for idx, term in enumerate(bundle.terms):
-            meta = dict(term.meta)
-            meta['source'] = 'bounded_degree_repeated_cff_confluent_limit'
-            meta['original_source'] = term.meta.get('source')
-            meta['energy_degree_bounds'] = list(bounds)
-            meta['energy_divergence'] = report
-            meta['merge_by_numerator_map'] = True
-            terms.append(OrientationTerm(
-                term.orientation_id,
-                'bounded_cff',
-                idx,
-                term.edge_orientations,
-                term.prefactor_sign,
-                term.prefactor_half_edges,
-                term.surface_chain,
-                term.loop_energy_exprs,
-                term.edge_energy_exprs,
-                meta,
-                term.numerator_surface_chain,
-            ))
-        return ExpressionBundle('bounded_cff', tuple(), tuple(), signatures, bundle.surface_cache, tuple(terms))
+        raise NotImplementedError(
+            'Bounded-degree pure CFF on unsplit repeated-propagator graphs is not implemented '
+            'with guaranteed E-surface-only denominators.  Use a mass-split graph for the pure '
+            'CFF/LTD comparison, or use family=hybrid for the repeated-pole representation.'
+        )
 
     if (
         len(parsed.loop_names) == 1
