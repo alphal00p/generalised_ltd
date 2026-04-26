@@ -155,6 +155,112 @@ class LinearEnergyExpr:
         return out
 
 @dataclass(frozen=True)
+class KnownLinearExpr:
+    var_terms: Tuple[Tuple[int, int], ...] = tuple()
+    ose_terms: Tuple[Tuple[int, int], ...] = tuple()
+    external_terms: Tuple[Tuple[int, int], ...] = tuple()
+    const: str = '0'
+
+    @staticmethod
+    def zero() -> 'KnownLinearExpr':
+        return KnownLinearExpr()
+
+    @staticmethod
+    def var(edge_id: int, coeff: int = 1) -> 'KnownLinearExpr':
+        return KnownLinearExpr(((int(edge_id), int(coeff)),), tuple(), tuple(), '0').canonical() if coeff else KnownLinearExpr.zero()
+
+    @staticmethod
+    def ose(edge_id: int, coeff: int = 1) -> 'KnownLinearExpr':
+        return KnownLinearExpr(tuple(), ((int(edge_id), int(coeff)),), tuple(), '0').canonical() if coeff else KnownLinearExpr.zero()
+
+    @staticmethod
+    def external(ext_id: int, coeff: int = 1) -> 'KnownLinearExpr':
+        return KnownLinearExpr(tuple(), tuple(), ((int(ext_id), int(coeff)),), '0').canonical() if coeff else KnownLinearExpr.zero()
+
+    def _const_frac(self) -> Fraction:
+        return Fraction(str(self.const))
+
+    def canonical(self) -> 'KnownLinearExpr':
+        vm: Dict[int, int] = {}
+        om: Dict[int, int] = {}
+        xm: Dict[int, int] = {}
+        for i, c in self.var_terms:
+            vm[int(i)] = vm.get(int(i), 0) + int(c)
+        for i, c in self.ose_terms:
+            om[int(i)] = om.get(int(i), 0) + int(c)
+        for i, c in self.external_terms:
+            xm[int(i)] = xm.get(int(i), 0) + int(c)
+        return KnownLinearExpr(
+            tuple(sorted((i, c) for i, c in vm.items() if c)),
+            tuple(sorted((i, c) for i, c in om.items() if c)),
+            tuple(sorted((i, c) for i, c in xm.items() if c)),
+            _frac_to_str(self._const_frac()),
+        )
+
+    def __add__(self, other: 'KnownLinearExpr') -> 'KnownLinearExpr':
+        return KnownLinearExpr(
+            self.var_terms + other.var_terms,
+            self.ose_terms + other.ose_terms,
+            self.external_terms + other.external_terms,
+            _frac_to_str(self._const_frac() + other._const_frac()),
+        ).canonical()
+
+    def __neg__(self) -> 'KnownLinearExpr':
+        return KnownLinearExpr(
+            tuple((i, -c) for i, c in self.var_terms),
+            tuple((i, -c) for i, c in self.ose_terms),
+            tuple((i, -c) for i, c in self.external_terms),
+            _frac_to_str(-self._const_frac()),
+        ).canonical()
+
+    def __sub__(self, other: 'KnownLinearExpr') -> 'KnownLinearExpr':
+        return self + (-other)
+
+    def mul(self, n: Fraction | int) -> 'KnownLinearExpr':
+        f = Fraction(n)
+        def scale_terms(terms):
+            out = []
+            for i, c in terms:
+                v = Fraction(c) * f
+                if v:
+                    if v.denominator != 1:
+                        raise NotImplementedError('Known numerator factors require integral linear coefficients')
+                    out.append((int(i), int(v)))
+            return tuple(out)
+        return KnownLinearExpr(
+            scale_terms(self.var_terms),
+            scale_terms(self.ose_terms),
+            scale_terms(self.external_terms),
+            _frac_to_str(self._const_frac() * f),
+        ).canonical()
+
+    def replace_var_with_ose(self, edge_id: int, sample: int, ose_edge_id: Optional[int] = None) -> 'KnownLinearExpr':
+        edge_id = int(edge_id)
+        ose_edge_id = edge_id if ose_edge_id is None else int(ose_edge_id)
+        out = KnownLinearExpr(tuple(), self.ose_terms, self.external_terms, self.const)
+        for i, c in self.var_terms:
+            if int(i) == edge_id:
+                out = out + KnownLinearExpr.ose(ose_edge_id, int(c) * int(sample))
+            else:
+                out = out + KnownLinearExpr.var(int(i), int(c))
+        return out.canonical()
+
+    def is_zero(self) -> bool:
+        item = self.canonical()
+        return not item.var_terms and not item.ose_terms and not item.external_terms and item.const in {'0', '0.0'}
+
+    def variable_edges(self) -> Tuple[int, ...]:
+        return tuple(int(i) for i, _ in self.var_terms)
+
+    def to_surface_expr(self, edge_exprs: Sequence[LinearEnergyExpr]) -> LinearEnergyExpr:
+        out = LinearEnergyExpr(tuple(), self.external_terms, self.const).canonical()
+        for edge_id, coeff in self.ose_terms:
+            out = out + LinearEnergyExpr.E(int(edge_id), int(coeff))
+        for edge_id, coeff in self.var_terms:
+            out = out + edge_exprs[int(edge_id)].mul(int(coeff))
+        return out.canonical()
+
+@dataclass(frozen=True)
 class SurfaceDef:
     surface_id: int; kind: str; expr: LinearEnergyExpr; label: str
 @dataclass(frozen=True)
@@ -1098,6 +1204,50 @@ def _contact_weight_polys(bound: int) -> Dict[int, Tuple[Fraction, ...]]:
 def _linear_expr_is_zero(expr: LinearEnergyExpr) -> bool:
     return not expr.internal_terms and not expr.external_terms and expr.const in {'0', '0.0'}
 
+def _linear_expr_is_one(expr: LinearEnergyExpr) -> bool:
+    return not expr.internal_terms and not expr.external_terms and expr.const == '1'
+
+def _known_from_linear_as_vars(expr: LinearEnergyExpr) -> KnownLinearExpr:
+    return KnownLinearExpr(expr.internal_terms, tuple(), expr.external_terms, expr.const).canonical()
+
+def _known_signature_expr(parsed: ParsedGraph, signature: Signature) -> KnownLinearExpr:
+    signatures = tuple(edge.signature for edge in parsed.internal_edges)
+    basis = choose_basis_indices(signatures)
+    targets = [LinearEnergyExpr.zero() for _ in signatures]
+    for edge_id in basis:
+        targets[int(edge_id)] = LinearEnergyExpr.E(int(edge_id), 1)
+    loop_exprs = solve_loop_energy_from_target_edge_exprs(signatures, basis, targets, len(parsed.ext_names))
+    q = LinearEnergyExpr.zero()
+    loop_coeffs, ext_coeffs = signature
+    for idx, coeff in enumerate(loop_coeffs):
+        if coeff:
+            q = q + loop_exprs[int(idx)].mul(int(coeff))
+    for ext_id, coeff in enumerate(ext_coeffs):
+        if coeff:
+            q = q + LinearEnergyExpr.X(int(ext_id), int(coeff))
+    return _known_from_linear_as_vars(q.canonical())
+
+def _remap_known_factor_to_sub(
+    parsed: ParsedGraph,
+    subparsed: ParsedGraph,
+    factor: KnownLinearExpr,
+) -> KnownLinearExpr:
+    out = KnownLinearExpr(tuple(), factor.ose_terms, factor.external_terms, factor.const)
+    for edge_id, coeff in factor.var_terms:
+        expr = _known_signature_expr(subparsed, parsed.internal_edges[int(edge_id)].signature)
+        out = out + expr.mul(int(coeff))
+    return out.canonical()
+
+def _known_degrees(n_edges: int, factors: Sequence[KnownLinearExpr]) -> List[int]:
+    degrees = [0 for _ in range(int(n_edges))]
+    for factor in factors:
+        for edge_id in set(factor.variable_edges()):
+            degrees[int(edge_id)] += 1
+    return degrees
+
+def _known_product_is_zero(factors: Sequence[KnownLinearExpr]) -> bool:
+    return any(factor.is_zero() for factor in factors)
+
 def _finite_pole_contact_components(
     edge_id: int,
     bound: int,
@@ -1891,6 +2041,241 @@ def build_quadratic_recursive_bounded_cff_bundle(
         ))
     return ExpressionBundle('bounded_cff', tuple(), tuple(), tuple(edge.signature for edge in parsed.internal_edges), sb.build(), tuple(enriched))
 
+def _append_known_base_terms(
+    parsed: ParsedGraph,
+    original_signatures: Tuple[Signature, ...],
+    local_to_orig: Tuple[int, ...],
+    replacements: Dict[int, LinearEnergyExpr],
+    known_factors: Tuple[KnownLinearExpr, ...],
+    extra_half_edges: Tuple[int, ...],
+    prefactor: Fraction,
+    report: dict,
+    lower_sector_base: bool,
+    sb: SurfaceCacheBuilder,
+    out_terms: List[OrientationTerm],
+    branch: int,
+) -> int:
+    if _known_product_is_zero(known_factors):
+        return branch
+    base_bundle = build_lower_sector_cff_bundle(parsed) if lower_sector_base else build_pure_cff_bundle(parsed)
+    edge_map = {local_id: orig_id for local_id, orig_id in enumerate(local_to_orig)}
+    surface_map = _copy_bundle_surfaces(sb, base_bundle, 'known-base', edge_map)
+    n_original = len(original_signatures)
+    for term in base_bundle.terms:
+        coeff = Fraction(str(term.prefactor_sign)) * Fraction(prefactor)
+        if not coeff:
+            continue
+        local_edge_exprs = tuple(_remap_linear_expr(expr, edge_map) for expr in term.edge_energy_exprs)
+        full_edge_exprs = [LinearEnergyExpr.zero() for _ in range(n_original)]
+        for local_id, orig_id in enumerate(local_to_orig):
+            full_edge_exprs[int(orig_id)] = local_edge_exprs[int(local_id)]
+        for orig_id, expr in replacements.items():
+            full_edge_exprs[int(orig_id)] = expr
+        num_surfaces = [int(surface_map[int(sid)]) for sid in term.numerator_surface_chain]
+        skip = False
+        for idx, factor in enumerate(known_factors):
+            surf_expr = factor.to_surface_expr(local_edge_exprs)
+            if _linear_expr_is_zero(surf_expr):
+                skip = True
+                break
+            if _linear_expr_is_one(surf_expr):
+                continue
+            num_surfaces.append(sb.intern('auto', surf_expr, f'known-factor-{branch}-{idx}'))
+        if skip:
+            continue
+        loop_exprs = tuple(_remap_linear_expr(expr, edge_map) for expr in term.loop_energy_exprs)
+        half_edges = tuple(sorted(tuple(int(local_to_orig[int(e)]) for e in term.prefactor_half_edges) + tuple(int(e) for e in extra_half_edges)))
+        meta = dict(term.meta)
+        meta.update({
+            'source': 'bounded_degree_known_factor_cff',
+            'original_source': term.meta.get('source'),
+            'energy_divergence': report,
+            'known_factor_count': len(known_factors),
+            'finite_pole_completion_e_surfaces_only': True,
+            'merge_by_numerator_map': True,
+        })
+        out_terms.append(OrientationTerm(
+            f'known|{term.orientation_id}|b{branch}',
+            'bounded_cff',
+            branch,
+            _derive_orientations_from_edge_exprs(full_edge_exprs),
+            _frac_to_str(coeff),
+            half_edges,
+            tuple(int(surface_map[int(sid)]) for sid in term.surface_chain),
+            loop_exprs,
+            tuple(full_edge_exprs),
+            meta,
+            tuple(num_surfaces),
+        ))
+        branch += 1
+    return branch
+
+def _known_total_bounds(
+    parsed: ParsedGraph,
+    local_to_orig: Tuple[int, ...],
+    bounds: Tuple[int, ...],
+    replacements: Dict[int, LinearEnergyExpr],
+    known_factors: Tuple[KnownLinearExpr, ...],
+) -> List[int]:
+    known = _known_degrees(len(parsed.internal_edges), known_factors)
+    total = []
+    for local_id, orig_id in enumerate(local_to_orig):
+        blackbox = 0 if int(orig_id) in replacements else int(bounds[int(orig_id)])
+        total.append(int(blackbox) + int(known[int(local_id)]))
+    return total
+
+def _known_recursive_terms(
+    parsed: ParsedGraph,
+    original_signatures: Tuple[Signature, ...],
+    local_to_orig: Tuple[int, ...],
+    bounds: Tuple[int, ...],
+    replacements: Dict[int, LinearEnergyExpr],
+    known_factors: Tuple[KnownLinearExpr, ...],
+    extra_half_edges: Tuple[int, ...],
+    prefactor: Fraction,
+    report: dict,
+    lower_sector_base: bool,
+    sb: SurfaceCacheBuilder,
+    out_terms: List[OrientationTerm],
+    branch: int,
+    depth: int = 0,
+) -> int:
+    if depth > 12:
+        raise RecursionError('bounded CFF known-factor recursion did not terminate')
+    known_factors = tuple(factor.canonical() for factor in known_factors)
+    if _known_product_is_zero(known_factors):
+        return branch
+    total_bounds = _known_total_bounds(parsed, local_to_orig, bounds, replacements, known_factors)
+    active = next((
+        idx for idx, degree in enumerate(total_bounds)
+        if int(degree) > 1
+        and int(bounds[int(local_to_orig[int(idx)])]) > 2
+        and int(local_to_orig[int(idx)]) not in replacements
+    ), None)
+    if active is None:
+        active = next((idx for idx, degree in enumerate(total_bounds) if int(degree) > 1), None)
+    if active is None:
+        return _append_known_base_terms(
+            parsed,
+            original_signatures,
+            local_to_orig,
+            replacements,
+            known_factors,
+            extra_half_edges,
+            prefactor,
+            report,
+            lower_sector_base,
+            sb,
+            out_terms,
+            branch,
+        )
+
+    orig_edge = int(local_to_orig[int(active)])
+
+    for sample, weight in (
+        (1, KnownLinearExpr.var(int(active), 1) + KnownLinearExpr.ose(orig_edge, 1)),
+        (-1, KnownLinearExpr.ose(orig_edge, 1) - KnownLinearExpr.var(int(active), 1)),
+    ):
+        sampled_factors = tuple(
+            factor.replace_var_with_ose(int(active), int(sample), orig_edge)
+            for factor in known_factors
+        ) + (weight,)
+        if _known_product_is_zero(sampled_factors):
+            continue
+        next_replacements = dict(replacements)
+        if orig_edge not in next_replacements:
+            next_replacements[orig_edge] = LinearEnergyExpr.E(orig_edge, int(sample))
+        branch = _known_recursive_terms(
+            parsed,
+            original_signatures,
+            local_to_orig,
+            bounds,
+            next_replacements,
+            sampled_factors,
+            tuple(extra_half_edges) + (orig_edge,),
+            prefactor,
+            report,
+            lower_sector_base,
+            sb,
+            out_terms,
+            branch,
+            depth + 1,
+        )
+
+    subparsed, sub_to_local = _delete_parsed_edges(parsed, (int(active),))
+    if not subparsed.internal_edges:
+        return branch
+    sub_local_to_orig = tuple(int(local_to_orig[int(sub_id)]) for sub_id in sub_to_local)
+    for sample, poly in _contact_weight_polys(int(total_bounds[int(active)])).items():
+        for power, coeff in enumerate(poly):
+            if not coeff:
+                continue
+            sampled_factors = [
+                factor.replace_var_with_ose(int(active), int(sample), orig_edge)
+                for factor in known_factors
+            ]
+            sampled_factors.extend(KnownLinearExpr.var(int(active), 1) for _ in range(int(power)))
+            if _known_product_is_zero(sampled_factors):
+                continue
+            remapped_factors = tuple(_remap_known_factor_to_sub(parsed, subparsed, factor) for factor in sampled_factors)
+            next_replacements = dict(replacements)
+            if orig_edge not in next_replacements:
+                next_replacements[orig_edge] = LinearEnergyExpr.E(orig_edge, int(sample)) if int(sample) else LinearEnergyExpr.zero()
+            branch = _known_recursive_terms(
+                subparsed,
+                original_signatures,
+                sub_local_to_orig,
+                bounds,
+                next_replacements,
+                remapped_factors,
+                tuple(extra_half_edges) + tuple(orig_edge for _ in range(int(power) + 2)),
+                Fraction(prefactor) * Fraction(coeff) * (2 ** (int(power) + 2)),
+                report,
+                True,
+                sb,
+                out_terms,
+                branch,
+                depth + 1,
+            )
+    return branch
+
+def build_known_factor_bounded_cff_bundle(parsed: ParsedGraph, bounds: Tuple[int, ...], report: dict) -> ExpressionBundle:
+    sb = SurfaceCacheBuilder()
+    terms: List[OrientationTerm] = []
+    branch = _known_recursive_terms(
+        parsed,
+        tuple(edge.signature for edge in parsed.internal_edges),
+        tuple(range(len(parsed.internal_edges))),
+        tuple(int(x) for x in bounds),
+        {},
+        tuple(),
+        tuple(),
+        Fraction(1),
+        report,
+        False,
+        sb,
+        terms,
+        0,
+    )
+    enriched = []
+    for idx, term in enumerate(terms):
+        meta = dict(term.meta)
+        meta['energy_degree_bounds'] = list(bounds)
+        enriched.append(OrientationTerm(
+            term.orientation_id,
+            term.family,
+            idx,
+            term.edge_orientations,
+            term.prefactor_sign,
+            term.prefactor_half_edges,
+            term.surface_chain,
+            term.loop_energy_exprs,
+            term.edge_energy_exprs,
+            meta,
+            term.numerator_surface_chain,
+        ))
+    return ExpressionBundle('bounded_cff', tuple(), tuple(), tuple(edge.signature for edge in parsed.internal_edges), sb.build(), tuple(enriched))
+
 def build_bounded_degree_cff_bundle(parsed, energy_degree_bounds):
     signatures = tuple(e.signature for e in parsed.internal_edges)
     bounds = normalize_energy_degree_bounds(energy_degree_bounds, len(signatures))
@@ -1930,20 +2315,27 @@ def build_bounded_degree_cff_bundle(parsed, energy_degree_bounds):
     if high_edges and duplicate_bounded_edges:
         raise NotImplementedError(
             'Bounded-degree pure CFF on repeated-signature graphs currently supports arbitrary '
-            'quadratic caps only.  Higher caps need the recursive repeated-sector E-only lift.'
+            'quadratic caps only.  Higher caps on repeated-signature edges should be evaluated '
+            'with family=hybrid, which implements the repeated-channel finite-difference lift.'
         )
 
     if (
         len(parsed.loop_names) == 1
     ):
         if high_edges:
-            isolated_cubic = len(high_edges) == 1 and int(bounds[high_edges[0]]) == 3 and sum(int(x) for x in bounds) == 3
-            if not isolated_cubic:
+            single_cubic_with_affine_spectators = (
+                len(high_edges) == 1
+                and int(bounds[high_edges[0]]) == 3
+                and all(int(bound) <= 1 for idx, bound in enumerate(bounds) if idx != high_edges[0])
+            )
+            if not single_cubic_with_affine_spectators:
                 raise NotImplementedError(
-                    'The bounded CFF lift supports arbitrary quadratic caps.  Higher caps or mixed '
-                    'cubic sectors need the next recursive reduction of known numerator-side '
-                    'polynomial factors.'
+                    'Pure CFF bounded-degree lift keeps E-surface denominators for arbitrary '
+                    'quadratic caps and for a single cubic cap with only affine spectator caps.  '
+                    'Mixed cubic/quadratic sectors and quartic-or-higher caps are not exposed '
+                    'because their lower contact sectors require infinity/contact completion.'
                 )
+            return build_known_factor_bounded_cff_bundle(parsed, bounds, report)
         if has_duplicate_signature:
             return build_quadratic_general_bounded_cff_bundle(parsed, bounds, report)
         return build_quadratic_e_surface_bounded_cff_bundle(parsed, bounds, report)
@@ -1952,8 +2344,9 @@ def build_bounded_degree_cff_bundle(parsed, energy_degree_bounds):
         return build_quadratic_general_bounded_cff_bundle(parsed, bounds, report)
 
     raise NotImplementedError(
-        'Bounded-degree pure CFF supports arbitrary quadratic caps.  Higher caps in multiloop '
-        'or repeated sectors need the recursive known-polynomial contact lift.'
+        'Pure CFF bounded-degree lift keeps E-surface denominators for arbitrary quadratic caps.  '
+        'Higher caps in multiloop sectors are not exposed because their lower contact sectors '
+        'require infinity/contact completion.'
     )
 
 def build_pure_ltd_bundle(signatures,n_external_symbols=None):

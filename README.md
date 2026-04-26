@@ -245,7 +245,9 @@ Current exact bounded-degree support:
 - `hybrid` without repeated propagators: collapses to LTD even with bounds.
 - `hybrid` with repeated propagators: bounded numerators are handled by the
   confluent hybrid formula with finite-difference numerator samples in the
-  residue-basis energy coordinates.
+  residue-basis energy coordinates.  Cubic, quartic, and quintic caps are
+  covered by tests against the split-mass LTD limiting proxy; larger caps are
+  accepted subject to the UV check and practical expression size.
 - `cff`: one-loop non-repeated graphs support arbitrary quadratic-or-lower caps
   with only regular `E`-surfaces in denominators.
 - `cff`: multiloop and split-repeated graphs support quadratic-or-lower caps by
@@ -256,7 +258,9 @@ Current exact bounded-degree support:
 - `cff`: repeated-signature graphs, including unsplit repeated propagators,
   support arbitrary quadratic-or-lower caps through the same recursive
   contact/minor construction; denominator surfaces remain `E`-only.
-- `cff`: isolated single-edge cubic caps are supported.
+- `cff`: one-loop graphs also support one single cubic cap with all other
+  bounded edges affine.  The cubic edge must not be a repeated-signature edge;
+  repeated propagators may still be present as affine spectators.
 
 Unsupported bounded CFF cases raise `NotImplementedError`; the old
 `CFF + (LTD - CFF)` contact fallback has been removed.
@@ -266,11 +270,11 @@ contacts produce only the three black-box samples `+E`, `0`, `-E` and no known
 polynomial numerator residue, so the implemented path covers the tested
 quadratic caps, including multiloop energy monomials and individual squared
 edge--external dot products.  Products that make a deleted lower causal
-component quadratic through several different spectator edge energies are the
-next refinement: they require interpolation in a component energy basis, not
-only per-edge finite-pole divisions.  Cubic, quartic, and mixed higher caps
-produce known numerator-side polynomial factors after a pinch; those factors
-must be recursively reduced before the result can again be serialized.
+component quadratic through several different spectator edge energies are
+currently rejected for pure CFF.  The known broken patterns include mixed
+cubic/quadratic caps such as `0:2,1:1,3:3` and quartic-or-higher caps.  These
+sectors require a lower-contact/infinity completion before they can honestly be
+serialized with E-surface-only CFF denominators.
 
 ## Tests
 
