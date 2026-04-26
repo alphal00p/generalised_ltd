@@ -44,6 +44,11 @@ run python3 hybrid3d.py test \
 
 section "Build JSON representations for evaluation"
 run python3 hybrid3d.py build \
+  --family ltd \
+  --dot "$DOT" \
+  --json-out "$OUT/box_pow3_ltd_builtin.json"
+
+run python3 hybrid3d.py build \
   --family hybrid \
   --dot "$DOT" \
   --json-out "$OUT/box_pow3_hybrid_builtin.json"
@@ -53,10 +58,19 @@ run python3 hybrid3d.py build \
   --dot "$DOT" \
   --json-out "$OUT/box_pow3_cff_builtin.json"
 
+run cp "$OUT/box_pow3_ltd_builtin.json" "$OUT/box_pow3_ltd_symbolica_real.json"
 run cp "$OUT/box_pow3_hybrid_builtin.json" "$OUT/box_pow3_hybrid_symbolica_real.json"
 run cp "$OUT/box_pow3_hybrid_builtin.json" "$OUT/box_pow3_hybrid_symbolica_complex.json"
 run cp "$OUT/box_pow3_cff_builtin.json" "$OUT/box_pow3_cff_symbolica_real.json"
 run cp "$OUT/box_pow3_cff_builtin.json" "$OUT/box_pow3_cff_symbolica_complex.json"
+
+section "Compile LTD Symbolica evaluator for stability reference"
+run python3 hybrid3d.py compile \
+  --orientation-json "$OUT/box_pow3_ltd_symbolica_real.json" \
+  --dot "$DOT" \
+  --numerator-expr "$NUMERATOR" \
+  --value-type real \
+  --output "$OUT/box_pow3_ltd_real.so"
 
 section "Compile real-valued Symbolica evaluator and display Symbolica input"
 printf '\n$ python3 hybrid3d.py compile --orientation-json %q --dot %q --numerator-expr %q --value-type real --display-expression --output %q | tee %q\n' \
@@ -172,6 +186,26 @@ python3 hybrid3d.py evaluate \
   --seed 1337 \
   --no-color \
   | tee "$OUT/profile_table.txt"
+
+section "Stability table: LTD vs CFF vs hybrid"
+printf '\n$ python3 hybrid3d.py evaluate --orientation-json %q --profile-label ltd --profile-json cff=%q --profile-json hybrid=%q --dot %q --masses %q --stability --seed 1337 --no-color | tee %q\n' \
+  "$OUT/box_pow3_ltd_symbolica_real.json" \
+  "$OUT/box_pow3_cff_symbolica_real.json" \
+  "$OUT/box_pow3_hybrid_symbolica_real.json" \
+  "$DOT" \
+  "$MASSES" \
+  "$OUT/stability_table.txt"
+python3 hybrid3d.py evaluate \
+  --orientation-json "$OUT/box_pow3_ltd_symbolica_real.json" \
+  --profile-label ltd \
+  --profile-json "cff=$OUT/box_pow3_cff_symbolica_real.json" \
+  --profile-json "hybrid=$OUT/box_pow3_hybrid_symbolica_real.json" \
+  --dot "$DOT" \
+  --masses "$MASSES" \
+  --stability \
+  --seed 1337 \
+  --no-color \
+  | tee "$OUT/stability_table.txt"
 
 section "Outputs"
 printf 'Wrote demo artifacts to %s\n' "$OUT"

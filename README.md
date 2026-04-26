@@ -143,6 +143,25 @@ python3 hybrid3d.py evaluate \
   --masses '{"m1":0.8,"m2":1.1,"m3":0.9,"m4":1.2}'
 ```
 
+Monitor decimal precision loss with the saved Symbolica eager evaluator:
+
+```bash
+python3 hybrid3d.py evaluate \
+  --orientation-json demo/box_ltd.json \
+  --profile-label ltd \
+  --profile-json cff=demo/box_cff.json \
+  --profile-json hybrid=demo/box_hybrid.json \
+  --dot examples/graphs/box_pow3.dot \
+  --stability \
+  --masses '{"m1":0.8,"m2":1.1,"m3":0.9,"m4":1.2}'
+```
+
+`--stability` uses the serialized Symbolica eager evaluator, converts the real
+input kinematics to precision-tracking decimal floats with 16 significant
+digits by default, evaluates at 80 decimal digits of work precision, and reports
+the number of significant digits carried by the final result.  Pass
+`--stability 20 --stability-work-precision 100` to change those two numbers.
+
 The `compile` command stores an `evaluator` compatibility block plus an
 `evaluators` block in the JSON.  It writes both a shared-library evaluator
 (`.so`) and a serialized eager Symbolica evaluator (`.sev`) next to the JSON by

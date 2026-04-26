@@ -506,6 +506,62 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
     assert 'relative' in profile_table.stdout
     assert '100.0%' in profile_table.stdout
 
+    stability = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'evaluate',
+            '--orientation-json',
+            str(json_path),
+            '--dot',
+            str(ROOT / 'examples' / 'graphs' / 'box.dot'),
+            '--stability',
+            '--masses',
+            masses,
+            '--seed',
+            '1337',
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    stability_data = json.loads(stability.stdout)
+    assert stability_data['input_precision_digits'] == 16
+    assert stability_data['work_precision_digits'] == 80
+    assert stability_data['value_type'] == 'real'
+    assert stability_data['precision_digits'] > 0
+    assert stability_data['map_count'] > 0
+    assert 'value' in stability_data
+
+    stability_table = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'evaluate',
+            '--orientation-json',
+            str(json_path),
+            '--profile-label',
+            'cff-a',
+            '--profile-json',
+            f'cff-b={json_path}',
+            '--dot',
+            str(ROOT / 'examples' / 'graphs' / 'box.dot'),
+            '--stability',
+            '--masses',
+            masses,
+            '--seed',
+            '1337',
+            '--no-color',
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    assert 'cff-a' in stability_table.stdout
+    assert 'cff-b' in stability_table.stdout
+    assert 'input digits' in stability_table.stdout
+    assert 'result digits' in stability_table.stdout
+
     builtin_profiled = subprocess.run(
         [
             sys.executable,

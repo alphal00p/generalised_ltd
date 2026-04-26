@@ -86,5 +86,24 @@ python3 hybrid3d.py evaluate \
   --seed "$SEED" \
   | tee "$OUT/profile_table.txt"
 
+section "Precision stability with Symbolica eager evaluators"
+printf '\n$ python3 hybrid3d.py evaluate --orientation-json %q --profile-label ltd --profile-json cff=%q --dot %q --masses %q --stability --seed %q --no-color | tee %q\n' \
+  "$OUT/ltd.json" \
+  "$OUT/cff.json" \
+  "$DOT" \
+  "$MASSES" \
+  "$SEED" \
+  "$OUT/stability_table.txt"
+python3 hybrid3d.py evaluate \
+  --orientation-json "$OUT/ltd.json" \
+  --profile-label ltd \
+  --profile-json "cff=$OUT/cff.json" \
+  --dot "$DOT" \
+  --masses "$MASSES" \
+  --stability \
+  --seed "$SEED" \
+  --no-color \
+  | tee "$OUT/stability_table.txt"
+
 section "Outputs"
 printf 'Wrote compiled JSON, eager evaluator state, shared libraries, and timing table under %s\n' "$OUT"

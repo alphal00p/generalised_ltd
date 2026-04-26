@@ -158,6 +158,26 @@ profile_scenario() {
     --profiling "$BATCH" \
     --seed "$SEED" \
     | tee "$scenario_dir/profile_table.txt"
+
+  printf '\n$ python3 hybrid3d.py evaluate --orientation-json %q --profile-label ltd --profile-json cff=%q --profile-json hybrid=%q --dot %q --masses %q --stability --seed %q --no-color | tee %q\n' \
+    "$scenario_dir/ltd.json" \
+    "$scenario_dir/cff.json" \
+    "$scenario_dir/hybrid.json" \
+    "$dot" \
+    "$masses" \
+    "$SEED" \
+    "$scenario_dir/stability_table.txt"
+  python3 hybrid3d.py evaluate \
+    --orientation-json "$scenario_dir/ltd.json" \
+    --profile-label ltd \
+    --profile-json "cff=$scenario_dir/cff.json" \
+    --profile-json "hybrid=$scenario_dir/hybrid.json" \
+    --dot "$dot" \
+    --masses "$masses" \
+    --stability \
+    --seed "$SEED" \
+    --no-color \
+    | tee "$scenario_dir/stability_table.txt"
 }
 
 profile_case() {

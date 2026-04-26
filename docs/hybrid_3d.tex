@@ -630,6 +630,18 @@ Profiling performs ten calls of a batch evaluator.  The default batch size is
 100, so a profile line reports one thousand repeated samples of the same input
 kinematics.
 
+The same saved eager evaluator is used by
+\texttt{evaluate --stability}.  This mode converts the generated or supplied
+real kinematic input to decimal precision-tracking numbers with 16 significant
+digits by default, evaluates with Symbolica's
+\texttt{Evaluator.evaluate\_with\_prec}, and reports the number of significant
+digits carried by the final decimal result.  The work precision for constants
+and arithmetic defaults to 80 decimal digits and can be changed with
+\texttt{--stability-work-precision}.  Non-finite outputs are assigned zero
+reported digits.  The printed central value is diagnostic only: once the
+reported digit count is small, the value may have lost enough significance to
+be numerically meaningless.
+
 \chapter{Performance}
 
 \section{Benchmark Setup}
@@ -760,6 +772,64 @@ linear case is slower for hybrid because the confluent interpolation creates
 heavier denominator variants per numerator map.  In the squared repeated case,
 the bounded-degree reduction compresses both CFF and hybrid to 115 maps and the
 two timings become nearly identical.
+
+\section{Precision Stability}
+
+The following tables use \texttt{evaluate --stability} with 16 significant
+digits in the input and 80 decimal digits of work precision.  They measure the
+precision carried by Symbolica's eager precision-tracking arithmetic through the
+already compiled structured expression.  These measurements are not identity
+tests; they probe numerical conditioning of the particular representation and
+kinematic point.  When only one or two digits remain, the displayed value should
+be interpreted as a symptom of cancellation rather than as a trustworthy
+estimate.
+
+\begin{center}
+\begin{tabular}{llrrr}
+\toprule
+example & family & maps & result digits & tracked value \\
+\midrule
+repeated box & LTD & 6 & 0 & \(\infty\) \\
+repeated box & CFF & 62 & 1 & \(10^{-2}\) \\
+repeated box & hybrid & 17 & 1 & \(-2\times 10^{3}\) \\
+one-loop 10-gon & LTD & 10 & 2 & \(2.6\times 10^{5}\) \\
+one-loop 10-gon & CFF & 1022 & 1 & \(10^{-1}\) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+For the repeated box, the LTD row is again not a valid repeated-propagator
+formula; its singular output is a useful reminder that the unsplit LTD
+structure contains zero repeated-channel surfaces.  CFF and hybrid have the
+same ordinary double value for this point, but the precision-tracking run shows
+that both are badly conditioned at 16 input digits, with the hybrid central
+value already unusable.  This is consistent with the hybrid expression being a
+more compact but more cancellation-prone confluent combination.
+
+\begin{center}
+\begin{tabular}{lrrr}
+\toprule
+five-loop case & LTD digits & CFF digits & hybrid digits \\
+\midrule
+no repeats, \(N=1\) & 2 & 2 & 2 \\
+no repeats, linear & 2 & 2 & 2 \\
+no repeats, squared & 2 & 2 & 2 \\
+repeated, \(N=1\) & 0 & 2 & 2 \\
+repeated, linear & 0 & 2 & 2 \\
+repeated, squared & 0 & 2 & 2 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The five-loop tables show that the tested random point is numerically delicate
+for all structured sums at ordinary double-like input precision.  The
+non-repeated hybrid rows coincide with LTD, as required by construction.  In
+the repeated graph, the invalid unsplit LTD expression produces \texttt{NaN}
+and therefore zero digits, while CFF and hybrid retain two tracked digits in
+all three numerator scenarios.  The result supports using the stability mode as
+a representation-level diagnostic: it highlights where algebraically equivalent
+JSON structures differ in numerical conditioning even when the ordinary
+double-precision evaluator returns matching values.
 
 \begin{thebibliography}{9}
   \bibitem{ltd1906}

@@ -157,6 +157,87 @@ def _profile_warnings(rows) -> list[str]:
     ]
 
 
+def _render_stability_table(rows, use_color: bool = True) -> str:
+    if not rows:
+        return ''
+    if PrettyTable is None:
+        header = ['label', 'family', 'value type', 'edges', 'externals', 'orientations', 'maps', 'input digits', 'result digits', 'value']
+        keys = ('label', 'family', 'value_type', 'internal_edges', 'external_symbols', 'orientations', 'maps', 'input_precision_digits', 'precision_digits', 'value_short')
+        return '\n'.join(['\t'.join(header)] + ['\t'.join(str(row[k]) for k in keys) for row in rows])
+    table = PrettyTable()
+    table.field_names = [
+        _color('label', Fore.CYAN + Style.BRIGHT, use_color),
+        _color('family', Fore.CYAN + Style.BRIGHT, use_color),
+        _color('type', Fore.CYAN + Style.BRIGHT, use_color),
+        _color('edges', Fore.CYAN + Style.BRIGHT, use_color),
+        _color('ext', Fore.CYAN + Style.BRIGHT, use_color),
+        _color('orientations', Fore.CYAN + Style.BRIGHT, use_color),
+        _color('maps', Fore.CYAN + Style.BRIGHT, use_color),
+        _color('input digits', Fore.CYAN + Style.BRIGHT, use_color),
+        _color('result digits', Fore.CYAN + Style.BRIGHT, use_color),
+        _color('value', Fore.CYAN + Style.BRIGHT, use_color),
+    ]
+    for row in rows:
+        precision = int(row['precision_digits'])
+        prec_style = Fore.GREEN if precision >= int(row['input_precision_digits']) else (Fore.YELLOW if precision >= 8 else Fore.RED)
+        table.add_row([
+            row['label'],
+            row['family'],
+            row['value_type'],
+            row['internal_edges'],
+            row['external_symbols'],
+            row['orientations'],
+            row['maps'],
+            row['input_precision_digits'],
+            _color(str(row['precision_digits']), prec_style, use_color),
+            row['value_short'],
+        ])
+    return str(table)
+
+
+def _stability_symbolica_targets(targets, dot, ext4, loop3, masses, input_precision: int, work_precision: int, use_color: bool):
+    rows = []
+    for label, path in targets:
+        if not path.exists():
+            raise SystemExit(f'Stability target JSON does not exist: {path}')
+        data = json.loads(path.read_text())
+        if 'symbolica_eager' not in SYMEVAL.available_symbolica_evaluator_modes(data):
+            raise SystemExit(f'Stability requires a saved Symbolica eager evaluator in {path}. Run compile first.')
+        graph = data.get('graph', {})
+        try:
+            result = SYMEVAL.evaluate_symbolica_stability(
+                data,
+                dot,
+                path,
+                ext4,
+                loop3,
+                masses,
+                input_precision=input_precision,
+                work_precision=work_precision,
+            )
+        except Exception as exc:
+            raise SystemExit(str(exc)) from exc
+        rows.append({
+            'label': label,
+            'family': data.get('family', '?'),
+            'value_type': result.get('value_type', '?'),
+            'internal_edges': graph.get('n_internal_edges', '?'),
+            'external_symbols': len(graph.get('ext_names', [])) if isinstance(graph.get('ext_names'), list) else '?',
+            'has_repeated_propagators': bool(graph.get('repeated_groups', [])),
+            'orientations': len(data.get('orientations', [])),
+            'maps': result.get('map_count', '?'),
+            'input_precision_digits': result['input_precision_digits'],
+            'work_precision_digits': result['work_precision_digits'],
+            'precision_digits': result['precision_digits'],
+            'component_precision_digits': result.get('component_precision_digits', {}),
+            'value': result['value'],
+            'value_short': SYMEVAL.compact_stability_value(result['value']),
+        })
+    print(_render_stability_table(rows, use_color=use_color))
+    for warning in _profile_warnings(rows):
+        print(_color(warning, Fore.YELLOW + Style.BRIGHT, use_color))
+
+
 def _split_backends_arg(value: str | None):
     if not value:
         return None
@@ -284,6 +365,31 @@ def cmd_evaluate(args):
     evaluator_backend = args.evaluator_backend
     if args.use_symbolica and evaluator_backend == 'builtin':
         evaluator_backend = 'symbolica_compiled'
+    if args.stability is not None:
+        if not pathlib.Path(args.orientation_json).exists():
+            raise SystemExit('--stability requires --orientation-json to be a JSON file path')
+        input_precision = int(args.stability)
+        work_precision = int(args.stability_work_precision)
+        targets = [(args.profile_label, pathlib.Path(args.orientation_json))]
+        targets.extend(_profile_target_from_arg(item) for item in (args.profile_json or []))
+        if args.profile_json:
+            _stability_symbolica_targets(targets, dot, ext4, loop3, masses, input_precision, work_precision, use_color=not args.no_color)
+        else:
+            json_path = pathlib.Path(args.orientation_json)
+            if 'symbolica_eager' not in SYMEVAL.available_symbolica_evaluator_modes(data):
+                raise SystemExit('Stability requires a saved Symbolica eager evaluator. Run the compile subcommand first.')
+            result = SYMEVAL.evaluate_symbolica_stability(
+                data,
+                dot,
+                json_path,
+                ext4,
+                loop3,
+                masses,
+                input_precision=input_precision,
+                work_precision=work_precision,
+            )
+            print(json.dumps(result, indent=2))
+        return
     if args.profile_json:
         if not args.profiling:
             raise SystemExit('--profile-json requires --profiling')
@@ -516,6 +622,8 @@ def main():
     e.add_argument('--use-symbolica', action='store_true')
     e.add_argument('--evaluator-backend', choices=['builtin', 'symbolica', 'symbolica_compiled', 'symbolica_eager', 'symbolica_eager_symjit'], default='builtin', help='Evaluator backend. "symbolica" is an alias for compiled evaluation for single runs and all available Symbolica modes in multi-JSON profiling.')
     e.add_argument('--profiling', nargs='?', const=100, type=int, help='Report timing for 10 evaluator calls over batches of this size; defaults to 100 when no size is given')
+    e.add_argument('--stability', nargs='?', const=16, type=int, help='Evaluate with Symbolica eager precision-tracking Decimal inputs and report resulting precision; defaults to 16 input digits')
+    e.add_argument('--stability-work-precision', type=int, default=80, help='Decimal work precision for --stability constants and operations')
     e.add_argument('--profile-label', default='baseline', help='Label for --orientation-json in a multi-JSON profiling table')
     e.add_argument('--profile-json', action='append', help='Additional JSON to profile as LABEL=PATH; repeat to compare several compiled structures')
     e.add_argument('--profile-evaluator-backends', help='Comma-separated Symbolica backends for --profile-json; default is all modes available in each JSON')

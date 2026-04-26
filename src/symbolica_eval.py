@@ -8,6 +8,7 @@ import os
 import pathlib
 import time
 from dataclasses import dataclass
+from decimal import Decimal
 from fractions import Fraction
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -538,6 +539,69 @@ def prepare_symbolica_inputs(metadata: Mapping[str, Any], dot: Any, ext4: Sequen
     return values
 
 
+def _decimal_from_input_float(value: Any, digits: int) -> Decimal:
+    return Decimal(format(float(value), f".{int(digits)}g"))
+
+
+def prepare_symbolica_decimal_inputs(
+    metadata: Mapping[str, Any],
+    dot: Any,
+    ext4: Sequence[Sequence[Any]],
+    loop3: Sequence[Sequence[Any]],
+    mass_map: Optional[Mapping[str, Any]],
+    input_precision: int = 16,
+):
+    parsed = parse_dot_graph(dot)
+    masses = resolve_edge_masses(parsed, dict(mass_map or {}))
+    values: List[Decimal] = []
+    for entry in metadata["input_layout"]:
+        kind = entry["kind"]
+        if kind == "external":
+            raw = ext4[int(entry["index"])][int(entry["component"])]
+        elif kind == "loop3":
+            raw = loop3[int(entry["index"])][int(entry["component"])]
+        elif kind == "mass":
+            raw = masses[int(entry["edge"])]
+        else:
+            raise ValueError(f"Unsupported Symbolica input layout kind {kind!r}.")
+        values.append(_decimal_from_input_float(raw, input_precision))
+    return values
+
+
+def decimal_precision_digits(value: Decimal) -> int:
+    if not isinstance(value, Decimal):
+        value = Decimal(str(value))
+    if not value.is_finite():
+        return 0
+    if value.is_zero():
+        return 0
+    digits = value.as_tuple().digits
+    return len(digits)
+
+
+def decimal_result_summary(value: Any) -> Dict[str, Any]:
+    if isinstance(value, tuple):
+        real, imag = value
+        real_prec = decimal_precision_digits(real)
+        imag_prec = decimal_precision_digits(imag)
+        nonzero = [p for p, component in ((real_prec, real), (imag_prec, imag)) if not component.is_zero()]
+        precision = min(nonzero) if nonzero else 0
+        return {
+            "value": f"({real}+{imag}j)",
+            "precision_digits": precision,
+            "component_precision_digits": {"real": real_prec, "imag": imag_prec},
+            "real": str(real),
+            "imag": str(imag),
+        }
+    precision = decimal_precision_digits(value)
+    return {
+        "value": str(value),
+        "precision_digits": precision,
+        "component_precision_digits": {"real": precision},
+        "real": str(value),
+    }
+
+
 def _metadata_library_path(json_path: pathlib.Path, metadata: Mapping[str, Any]) -> pathlib.Path:
     lib = pathlib.Path(str(metadata["library"]))
     if not lib.is_absolute():
@@ -659,6 +723,50 @@ def evaluate_symbolica(
         "seconds_per_sample": elapsed / (batch_size * DEFAULT_PROFILE_CALLS),
         "seconds_per_call": elapsed / DEFAULT_PROFILE_CALLS,
     }
+
+
+def evaluate_symbolica_stability(
+    data: Mapping[str, Any],
+    dot: Any,
+    json_path: pathlib.Path,
+    ext4: Sequence[Sequence[Any]],
+    loop3: Sequence[Sequence[Any]],
+    mass_map: Optional[Mapping[str, Any]],
+    input_precision: int = 16,
+    work_precision: int = 80,
+) -> Dict[str, Any]:
+    metadata = symbolica_evaluator_metadata(data, "symbolica_eager")
+    if metadata.get("structure_fingerprint") != structure_fingerprint(data):
+        raise ValueError("Symbolica evaluator is stale: structure fingerprint does not match this JSON.")
+    if metadata.get("graph_fingerprint") != graph_fingerprint(dot):
+        raise ValueError("Symbolica evaluator is stale: graph fingerprint does not match the DOT graph.")
+    if int(input_precision) < 1:
+        raise ValueError("input_precision must be positive.")
+    if int(work_precision) < int(input_precision):
+        raise ValueError("work_precision must be at least input_precision.")
+
+    evaluator = load_eager_evaluator(pathlib.Path(json_path), metadata)
+    row = prepare_symbolica_decimal_inputs(metadata, dot, ext4, loop3, mass_map, input_precision)
+    if metadata["value_type"] == "complex":
+        result = evaluator.evaluate_complex_with_prec([(x, Decimal(0)) for x in row], int(work_precision))[0]
+    else:
+        result = evaluator.evaluate_with_prec(row, int(work_precision))[0]
+    summary = decimal_result_summary(result)
+    summary.update(
+        {
+            "input_precision_digits": int(input_precision),
+            "work_precision_digits": int(work_precision),
+            "value_type": metadata.get("value_type", "?"),
+            "map_count": metadata.get("map_count", "?"),
+        }
+    )
+    return summary
+
+
+def compact_stability_value(value: str, max_len: int = 28) -> str:
+    if len(value) <= max_len:
+        return value
+    return value[: max_len - 3] + "..."
 
 
 def format_duration(seconds: float) -> str:
