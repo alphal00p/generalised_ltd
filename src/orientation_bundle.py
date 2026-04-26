@@ -1126,12 +1126,16 @@ def _finite_pole_remainder_components(
     current_expr: LinearEnergyExpr,
     sb: SurfaceCacheBuilder,
 ) -> Tuple[Tuple[int, Fraction, Tuple[int, ...], Tuple[int, ...]], ...]:
-    plus = sb.intern('auto', (current_expr + LinearEnergyExpr.E(edge_id, 1)).canonical(), f'remainder-plus-q{edge_id}')
-    minus = sb.intern('auto', (LinearEnergyExpr.E(edge_id, 1) - current_expr).canonical(), f'remainder-minus-q{edge_id}')
-    return (
-        (1, Fraction(1), (int(edge_id),), (int(plus),)),
-        (-1, Fraction(1), (int(edge_id),), (int(minus),)),
-    )
+    components: List[Tuple[int, Fraction, Tuple[int, ...], Tuple[int, ...]]] = []
+    plus_expr = (current_expr + LinearEnergyExpr.E(edge_id, 1)).canonical()
+    if not _linear_expr_is_zero(plus_expr):
+        plus = sb.intern('auto', plus_expr, f'remainder-plus-q{edge_id}')
+        components.append((1, Fraction(1), (int(edge_id),), (int(plus),)))
+    minus_expr = (LinearEnergyExpr.E(edge_id, 1) - current_expr).canonical()
+    if not _linear_expr_is_zero(minus_expr):
+        minus = sb.intern('auto', minus_expr, f'remainder-minus-q{edge_id}')
+        components.append((-1, Fraction(1), (int(edge_id),), (int(minus),)))
+    return tuple(components)
 
 def _delete_parsed_edges(parsed: ParsedGraph, pinched_edges: Sequence[int]) -> Tuple[ParsedGraph, Tuple[int, ...]]:
     pinched = {int(e) for e in pinched_edges}
@@ -1597,6 +1601,7 @@ def build_lower_sector_cff_bundle(parsed: ParsedGraph) -> ExpressionBundle:
         surface_chain=tuple(),
         numerator_surface_chain=tuple(),
         targets={},
+        edge_exprs={},
         edge_orientations=[0 for _ in range(n_internal)],
         labels=[],
         component_meta=[],
@@ -1614,6 +1619,7 @@ def build_lower_sector_cff_bundle(parsed: ParsedGraph) -> ExpressionBundle:
                     'surface_chain': tuple(partial['surface_chain']) + tuple(surface_map[int(sid)] for sid in term.surface_chain),
                     'numerator_surface_chain': tuple(partial['numerator_surface_chain']) + tuple(surface_map[int(sid)] for sid in term.numerator_surface_chain),
                     'targets': dict(partial['targets']),
+                    'edge_exprs': dict(partial['edge_exprs']),
                     'edge_orientations': list(partial['edge_orientations']),
                     'labels': list(partial['labels']) + [f"{component['backend']}:{term.orientation_id}"],
                     'component_meta': list(partial['component_meta']) + [{
@@ -1626,9 +1632,11 @@ def build_lower_sector_cff_bundle(parsed: ParsedGraph) -> ExpressionBundle:
                     }],
                 }
                 for local_id, sub_id in edge_map.items():
+                    lifted_expr = _remap_linear_expr(term.edge_energy_exprs[int(local_id)], edge_map)
+                    item['edge_exprs'][int(sub_id)] = lifted_expr
                     item['edge_orientations'][int(sub_id)] = int(term.edge_orientations[int(local_id)])
                     if int(sub_id) in basis_sub:
-                        item['targets'][int(sub_id)] = _remap_linear_expr(term.edge_energy_exprs[int(local_id)], edge_map)
+                        item['targets'][int(sub_id)] = lifted_expr
                 next_partials.append(item)
         partials = next_partials
 
@@ -1646,7 +1654,9 @@ def build_lower_sector_cff_bundle(parsed: ParsedGraph) -> ExpressionBundle:
         for edge_id in global_basis:
             targets[int(edge_id)] = partial['targets'][int(edge_id)]
         loop_exprs = solve_loop_energy_from_target_edge_exprs(signatures, global_basis, targets, len(parsed.ext_names))
-        edge_exprs = edge_q0_from_loop_exprs(signatures, loop_exprs, len(parsed.ext_names))
+        edge_exprs = list(target_template)
+        for edge_id, expr in partial['edge_exprs'].items():
+            edge_exprs[int(edge_id)] = expr
         edge_orientations = _derive_orientations_from_edge_exprs(edge_exprs)
         terms.append(OrientationTerm(
             'lower-cff|' + '|'.join(str(x) for x in partial['labels']),
@@ -1671,6 +1681,22 @@ def build_lower_sector_cff_bundle(parsed: ParsedGraph) -> ExpressionBundle:
 
 def build_quadratic_general_bounded_cff_bundle(parsed: ParsedGraph, bounds: Tuple[int, ...], report: dict) -> ExpressionBundle:
     return build_quadratic_recursive_bounded_cff_bundle(parsed, bounds, report, lower_sector_base=False)
+
+def _signature_multiplicities_ignoring_mass(parsed: ParsedGraph) -> Dict[Tuple[Tuple[int, ...], Tuple[int, ...]], int]:
+    counts: Dict[Tuple[Tuple[int, ...], Tuple[int, ...]], int] = {}
+    for edge in parsed.internal_edges:
+        loop, ext = edge.signature
+        sig = (tuple(loop), tuple(ext))
+        neg = (tuple(-x for x in loop), tuple(-x for x in ext))
+        key = sig if sig <= neg else neg
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+def _signature_key_ignoring_mass(signature: Signature) -> Tuple[Tuple[int, ...], Tuple[int, ...]]:
+    loop, ext = signature
+    sig = (tuple(loop), tuple(ext))
+    neg = (tuple(-x for x in loop), tuple(-x for x in ext))
+    return sig if sig <= neg else neg
 
 def _copy_bundle_surfaces(sb: SurfaceCacheBuilder, bundle: ExpressionBundle, label_prefix: str, edge_map: Optional[Dict[int, int]] = None):
     edge_map = edge_map or {idx: idx for idx in range(len(bundle.signatures))}
@@ -1894,11 +1920,17 @@ def build_bounded_degree_cff_bundle(parsed, energy_degree_bounds):
         return ExpressionBundle(bundle.family, bundle.loop_names, bundle.ext_names, bundle.signatures, bundle.surface_cache, tuple(terms))
 
     high_edges = [idx for idx, bound in enumerate(bounds) if int(bound) > 2]
-    if repeated_groups(parsed):
+    signature_counts = _signature_multiplicities_ignoring_mass(parsed)
+    duplicate_bounded_edges = [
+        idx
+        for idx, bound in enumerate(bounds)
+        if int(bound) > 1 and signature_counts[_signature_key_ignoring_mass(parsed.internal_edges[idx].signature)] > 1
+    ]
+    has_duplicate_signature = any(count > 1 for count in signature_counts.values())
+    if high_edges and duplicate_bounded_edges:
         raise NotImplementedError(
-            'Bounded-degree pure CFF on unsplit repeated-propagator graphs is not implemented '
-            'with guaranteed E-surface-only denominators.  Use a mass-split graph for the pure '
-            'CFF/LTD comparison, or use family=hybrid for the repeated-pole representation.'
+            'Bounded-degree pure CFF on repeated-signature graphs currently supports arbitrary '
+            'quadratic caps only.  Higher caps need the recursive repeated-sector E-only lift.'
         )
 
     if (
@@ -1912,6 +1944,8 @@ def build_bounded_degree_cff_bundle(parsed, energy_degree_bounds):
                     'cubic sectors need the next recursive reduction of known numerator-side '
                     'polynomial factors.'
                 )
+        if has_duplicate_signature:
+            return build_quadratic_general_bounded_cff_bundle(parsed, bounds, report)
         return build_quadratic_e_surface_bounded_cff_bundle(parsed, bounds, report)
 
     if not high_edges:

@@ -1203,9 +1203,29 @@ def test_bounded_degree_cff_matches_ltd_for_quadratic_edge_energy():
     assert cff_data['backend'] == 'bounded_degree_bundle'
     assert cff_data['graph']['energy_divergence']['convergent'] is True
     assert {s['k'] for s in cff_data['surfaces']} <= {'e'}
-    assert any(o['meta']['source'] == 'bounded_degree_e_surface_pinch_cff' for o in cff_data['orientations'])
+    assert any(
+        var['meta'].get('quadratic_remainder_contact_decomposition')
+        for orient in cff_data['orientations']
+        for var in orient['variants']
+    )
 
     numerator = 'edges[0][0]**2'
+    cff = evaluate_structure(cff_data, split_dot, ext4, loop3, numerator, 80, split_masses)
+    ltd = evaluate_structure(ltd_data, split_dot, ext4, loop3, numerator, 80, split_masses)
+    assert abs(cff - ltd) < mp.mpf('1e-65'), (cff, ltd)
+
+def test_bounded_degree_cff_split_repeated_keeps_all_spectator_edge_maps():
+    d = dot('box_pow3.dot')
+    parsed = GIO.parse_dot_graph(d)
+    split_dot, _ = GIO.build_split_mass_dot(d)
+    ext4, loop3, default_masses = __import__('src.api').api._random_default_inputs(split_dot, 1337)
+    split_masses = GIO.build_split_mass_assignments(parsed, {**default_masses, **BOX_MASSES}, '0.001')
+    bounds = {0: 1, 1: 1, 2: 1, 3: 2}
+    cff_data = build_structure(split_dot, 'cff', energy_degree_bounds=bounds)
+    ltd_data = build_structure(split_dot, 'ltd')
+    assert _denominator_surface_kinds(cff_data) <= {'e'}
+
+    numerator = 'edges[0][0] * edges[1][0] * edges[2][0] * edges[3][0]**2'
     cff = evaluate_structure(cff_data, split_dot, ext4, loop3, numerator, 80, split_masses)
     ltd = evaluate_structure(ltd_data, split_dot, ext4, loop3, numerator, 80, split_masses)
     assert abs(cff - ltd) < mp.mpf('1e-65'), (cff, ltd)
@@ -1318,12 +1338,29 @@ def test_bounded_degree_cff_repairs_known_quadratic_cff_ltd_mismatch():
     assert abs(ordinary - ltd) > mp.mpf('1e-3')
     assert abs(bounded - ltd) < mp.mpf('1e-65')
 
-def test_bounded_degree_cff_rejects_unsplit_repeated_quadratic_bounds():
+def test_bounded_degree_cff_supports_unsplit_repeated_quadratic_bounds_e_only():
     d = dot('box_pow3.dot')
-    with pytest.raises(NotImplementedError, match='unsplit repeated-propagator graphs'):
-        build_structure(d, 'cff', energy_degree_bounds={3: 2})
-    with pytest.raises(NotImplementedError, match='unsplit repeated-propagator graphs'):
-        build_structure(d, 'cff', energy_degree_bounds={0: 1, 1: 1, 2: 1, 3: 2})
+    ext4, loop3, default_masses = __import__('src.api').api._random_default_inputs(d, 1337)
+    masses = {**default_masses, **BOX_MASSES}
+    bounds = {0: 2, 1: 1, 2: 1, 3: 2}
+    numerator = 'edges[0][0]**2 * edges[1][0] * edges[2][0] * edges[3][0]**2'
+    cff = build_structure(d, 'cff', energy_degree_bounds=bounds)
+    hybrid = build_structure(d, 'hybrid', energy_degree_bounds=bounds)
+    assert cff['backend'] == 'bounded_degree_bundle'
+    assert _denominator_surface_kinds(cff) <= {'e'}
+    assert any(
+        var['meta'].get('quadratic_sector_backend') == 'recursive_contact_cff_e_only'
+        for orient in cff['orientations']
+        for var in orient['variants']
+    )
+    cff_val = evaluate_structure(cff, d, ext4, loop3, numerator, 80, masses)
+    hybrid_val = evaluate_structure(hybrid, d, ext4, loop3, numerator, 80, masses)
+    assert abs(cff_val - hybrid_val) < mp.mpf('1e-65')
+
+def test_bounded_degree_cff_rejects_unsplit_repeated_higher_bounds():
+    d = dot('box_pow3.dot')
+    with pytest.raises(NotImplementedError, match='repeated-signature graphs'):
+        build_structure(d, 'cff', energy_degree_bounds={3: 3})
 
 def test_bounded_degree_cff_rejects_nonconvergent_energy_bounds():
     split_dot = dot('box.dot')
