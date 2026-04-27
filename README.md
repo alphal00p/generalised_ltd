@@ -248,7 +248,7 @@ Current exact bounded-degree support:
   residue-basis energy coordinates.  Cubic, quartic, and quintic caps are
   covered by tests against the split-mass LTD limiting proxy; larger caps are
   accepted subject to the UV check and practical expression size.
-- `cff`: one-loop non-repeated graphs support arbitrary quadratic-or-lower caps
+- `cff`: one-loop non-repeated graphs support arbitrary UV-convergent caps
   with only regular `E`-surfaces in denominators.
 - `cff`: multiloop and split-repeated graphs support quadratic-or-lower caps by
   summing finite-pole remainder/contact sectors.  Deleted lower sectors are
@@ -258,23 +258,23 @@ Current exact bounded-degree support:
 - `cff`: repeated-signature graphs, including unsplit repeated propagators,
   support arbitrary quadratic-or-lower caps through the same recursive
   contact/minor construction; denominator surfaces remain `E`-only.
-- `cff`: one-loop graphs also support one single cubic cap with all other
-  bounded edges affine.  The cubic edge must not be a repeated-signature edge;
-  repeated propagators may still be present as affine spectators.
+- `cff`: cubic, mixed cubic/quadratic, and quartic-or-higher caps are supported
+  through recursive lower-contact completion as long as no cap above two is
+  placed on a repeated-signature edge.  Terminal tadpoles are encoded as unit
+  denominator-tree nodes, so pure CFF denominators remain `E`-surface-only.
 
 Unsupported bounded CFF cases raise `NotImplementedError`; the old
 `CFF + (LTD - CFF)` contact fallback has been removed.
 
-The main open distinction is quadratic versus genuinely higher power.  Quadratic
-contacts produce only the three black-box samples `+E`, `0`, `-E` and no known
-polynomial numerator residue, so the implemented path covers the tested
-quadratic caps, including multiloop energy monomials and individual squared
-edge--external dot products.  Products that make a deleted lower causal
-component quadratic through several different spectator edge energies are
-currently rejected for pure CFF.  The known broken patterns include mixed
-cubic/quadratic caps such as `0:2,1:1,3:3` and quartic-or-higher caps.  These
-sectors require a lower-contact/infinity completion before they can honestly be
-serialized with E-surface-only CFF denominators.
+The main remaining pure-CFF limitation is repeated signatures.  Quadratic caps
+on repeated-signature graphs are supported, but caps above two on a repeated
+signature are rejected and should be handled with `--family hybrid`.  For
+non-repeated high-power edges, the CFF builder recursively reduces lower
+contact sectors, decomposes multiloop lower denominators into loop-energy
+matroid components, and serializes terminal tadpoles as unit denominator-tree
+nodes.  If a lower sector cannot be reconstructed with this E-only grammar, the
+builder raises `NotImplementedError` instead of silently falling back to an LTD
+contact correction.
 
 ## Tests
 

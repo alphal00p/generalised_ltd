@@ -155,6 +155,14 @@ def _denominator_surface_kinds(data):
                 out.update(surface_kinds[int(surface_id)] for surface_id in node.get('surfaces', []))
     return out
 
+def _has_unit_denominator_tree(data):
+    return any(
+        not node.get('surfaces') and not node.get('children')
+        for orient in data['orientations']
+        for variant in orient.get('variants', [])
+        for node in variant['tree']['nodes']
+    )
+
 def assert_unique_edge_numerator_maps(data):
     seen = set()
     for orient in data['orientations']:
@@ -1309,26 +1317,16 @@ def test_normal_box_bounded_degree_cff_matches_ltd_for_all_convergent_edge_power
     # Four one-loop propagators give denominator degree 8 in k^0.  The
     # one-dimensional contour is convergent for total numerator degree <= 6.
     bounds_to_test = [
-        bounds for bounds in itertools.product(range(3), repeat=4)
+        bounds for bounds in itertools.product(range(7), repeat=4)
         if sum(bounds) <= 6
     ]
-    bounds_to_test.extend(
-        tuple(
-            3 if i == cubic_edge else
-            int(mask[other_edges.index(i)]) if i in other_edges else
-            0
-            for i in range(4)
-        )
-        for cubic_edge in range(4)
-        for other_edges in [tuple(i for i in range(4) if i != cubic_edge)]
-        for mask in itertools.product((0, 1), repeat=3)
-    )
     bounds_to_test = list(dict.fromkeys(bounds_to_test))
-    assert len(bounds_to_test) == 108
+    assert len(bounds_to_test) == 210
 
     for bounds in bounds_to_test:
         cff_data = build_structure(d, 'cff', energy_degree_bounds=list(bounds))
         assert cff_data['graph']['energy_divergence']['convergent'] is True
+        assert _denominator_surface_kinds(cff_data) <= {'e'}
         numerator = _edge_energy_monomial(bounds)
         cff = evaluate_structure(cff_data, d, ext4, loop3, numerator, 80, masses)
         ltd = evaluate_structure(ltd_data, d, ext4, loop3, numerator, 80, masses)
@@ -1341,6 +1339,10 @@ def test_normal_box_bounded_degree_cff_structure_morphs_after_affine_degree():
     bilinear = build_structure(d, 'cff', energy_degree_bounds=[1, 1, 0, 0])
     quadratic = build_structure(d, 'cff', energy_degree_bounds=[2, 0, 0, 0])
     cubic_with_affine_spectators = build_structure(d, 'cff', energy_degree_bounds=[1, 1, 1, 3])
+    cubic_with_quadratic_contact = build_structure(d, 'cff', energy_degree_bounds=[0, 0, 3, 3])
+    quartic = build_structure(d, 'cff', energy_degree_bounds=[4, 2, 0, 0])
+    ltd = build_structure(d, 'ltd')
+    hybrid = build_structure(d, 'hybrid', energy_degree_bounds=[0, 0, 3, 3])
     maximal = build_structure(d, 'cff', energy_degree_bounds=[2, 2, 1, 1])
     triple_quadratic = build_structure(d, 'cff', energy_degree_bounds=[2, 2, 2, 0])
 
@@ -1349,9 +1351,24 @@ def test_normal_box_bounded_degree_cff_structure_morphs_after_affine_degree():
     assert len(bilinear['orientations']) == len(ordinary['orientations'])
     assert len(quadratic['orientations']) > len(ordinary['orientations'])
     assert len(cubic_with_affine_spectators['orientations']) > len(quadratic['orientations'])
+    assert len(cubic_with_quadratic_contact['orientations']) > len(cubic_with_affine_spectators['orientations'])
+    assert len(quartic['orientations']) > len(quadratic['orientations'])
     assert len(maximal['orientations']) > len(quadratic['orientations'])
     assert {s['k'] for s in quadratic['surfaces']} <= {'e'}
     assert _denominator_surface_kinds(cubic_with_affine_spectators) <= {'e'}
+    assert _denominator_surface_kinds(cubic_with_quadratic_contact) <= {'e'}
+    assert _denominator_surface_kinds(quartic) <= {'e'}
+    assert _has_unit_denominator_tree(cubic_with_quadratic_contact)
+    assert _has_unit_denominator_tree(quartic)
+    assert cubic_with_quadratic_contact['orientations'] != ltd['orientations']
+    hybrid_cmp = json.loads(json.dumps(hybrid))
+    ltd_cmp = json.loads(json.dumps(ltd))
+    for item in (hybrid_cmp, ltd_cmp):
+        item['family'] = 'same'
+        item['backend'] = 'same'
+        item['graph'].pop('energy_degree_bounds', None)
+        item['graph'].pop('energy_divergence', None)
+    assert hybrid_cmp == ltd_cmp
     assert {s['k'] for s in maximal['surfaces']} <= {'e'}
     assert {s['k'] for s in triple_quadratic['surfaces']} <= {'e'}
     assert all(o['meta'].get('source') != 'bounded_degree_ltd_contact_part' for o in quadratic['orientations'])
@@ -1443,14 +1460,39 @@ def test_energy_uv_check_scans_noncoordinate_loop_directions():
     with pytest.raises(ValueError, match='direction active='):
         assert_energy_uv_convergent(signatures, [2, 2, 0])
 
-def test_bounded_degree_cff_rejects_unimplemented_higher_contact_recursion():
+def test_bounded_degree_cff_supports_higher_one_loop_contact_recursion():
     split_dot = dot('box.dot')
-    with pytest.raises(NotImplementedError, match='quartic-or-higher'):
-        build_structure(split_dot, 'cff', energy_degree_bounds={0: 4})
-    with pytest.raises(NotImplementedError, match='Mixed cubic/quadratic'):
-        build_structure(split_dot, 'cff', energy_degree_bounds={0: 3, 1: 2})
-    with pytest.raises(NotImplementedError, match='Mixed cubic/quadratic'):
-        build_structure(split_dot, 'cff', energy_degree_bounds={0: 2, 1: 1, 3: 3})
+    ext4, loop3, masses = __import__('src.api').api._random_default_inputs(split_dot, 1337)
+    ltd = build_structure(split_dot, 'ltd')
+    for bounds in ([4, 0, 0, 0], [3, 2, 0, 0], [2, 1, 0, 3], [0, 0, 3, 3]):
+        cff = build_structure(split_dot, 'cff', energy_degree_bounds=bounds)
+        assert _denominator_surface_kinds(cff) <= {'e'}
+        numerator = _edge_energy_monomial(bounds)
+        cff_val = evaluate_structure(cff, split_dot, ext4, loop3, numerator, 80, masses)
+        ltd_val = evaluate_structure(ltd, split_dot, ext4, loop3, numerator, 80, masses)
+        assert abs(cff_val - ltd_val) < mp.mpf('1e-65'), (bounds, cff_val, ltd_val)
+
+def test_bounded_degree_cff_supports_rank_deficient_multiloop_contact_completion():
+    expr = 'prop(k1,m1)*prop(k1+p1,m2)*prop(k2,m3)*prop(k2+p2,m4)*prop(k1+k2+p3,m5)'
+    d, _signatures, _loop_names, _ext_names, _masses = SIG2G.reconstruct_dot_from_symbolica_expression(expr)
+    ext4, loop3, masses = __import__('src.api').api._random_default_inputs(d, 123)
+    ltd = build_structure(d, 'ltd')
+    bounds_to_test = [
+        [1, 0, 3, 0, 3],
+        [0, 0, 0, 0, 4],
+        [1, 0, 3, 3, 0],
+        [0, 0, 3, 0, 3],
+    ]
+    saw_unit_tree = False
+    for bounds in bounds_to_test:
+        cff = build_structure(d, 'cff', energy_degree_bounds=bounds)
+        assert _denominator_surface_kinds(cff) <= {'e'}
+        saw_unit_tree = saw_unit_tree or _has_unit_denominator_tree(cff)
+        numerator = _edge_energy_monomial(bounds)
+        cff_val = evaluate_structure(cff, d, ext4, loop3, numerator, 70, masses)
+        ltd_val = evaluate_structure(ltd, d, ext4, loop3, numerator, 70, masses)
+        assert abs(cff_val - ltd_val) < mp.mpf('1e-55'), (bounds, cff_val, ltd_val)
+    assert saw_unit_tree
 
 def test_cff_ltd_test_helper_uses_bounded_degree_cff():
     d = dot('box_pow3.dot')

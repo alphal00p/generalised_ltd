@@ -374,6 +374,38 @@ def solve_loop_energy_from_target_edge_exprs(signatures,basis,target_edge_exprs,
         rhs.append(r)
     return tuple(_solve_expr_system(A,rhs))
 
+def solve_loop_energy_particular_from_target_edge_exprs(signatures, basis, target_edge_exprs, n_external):
+    """Solve a possibly rank-deficient edge-energy system with free q0's set to zero."""
+    n_loops = len(signatures[0][0]) if signatures else 0
+    basis = tuple(int(edge_index) for edge_index in basis)
+    if len(basis) == n_loops:
+        return solve_loop_energy_from_target_edge_exprs(signatures, basis, target_edge_exprs, n_external)
+    if not basis:
+        return tuple(LinearEnergyExpr.zero() for _ in range(n_loops))
+    A = []
+    rhs = []
+    for edge_index in basis:
+        loop_coeffs, ext_coeffs = signatures[int(edge_index)]
+        A.append([int(x) for x in loop_coeffs])
+        r = target_edge_exprs[int(edge_index)]
+        for a, c in enumerate(ext_coeffs):
+            if c:
+                r = r - LinearEnergyExpr.X(a, int(c))
+        rhs.append(r)
+    rank = _rank(A)
+    if rank != len(basis):
+        raise ValueError('Particular loop-energy solve requires independent target edges')
+    for cols in itertools.combinations(range(n_loops), rank):
+        square = [[row[int(col)] for col in cols] for row in A]
+        if _rank(square) != rank:
+            continue
+        solved = _solve_expr_system(square, rhs)
+        out = [LinearEnergyExpr.zero() for _ in range(n_loops)]
+        for col, expr in zip(cols, solved):
+            out[int(col)] = expr
+        return tuple(out)
+    raise ValueError('Could not find independent loop columns for particular solve')
+
 def edge_q0_from_loop_exprs(signatures, loop_exprs, n_external):
     out=[]
     for loop_coeffs, ext_coeffs in signatures:
@@ -1724,9 +1756,9 @@ def build_lower_sector_cff_bundle(parsed: ParsedGraph) -> ExpressionBundle:
     signatures = tuple(edge.signature for edge in parsed.internal_edges)
     total_rank = _rank([sig[0] for sig in signatures])
     n_loops = len(parsed.loop_names)
-    if total_rank != n_loops:
+    if total_rank == 0 and n_internal:
         raise NotImplementedError(
-            f'Quadratic lower-sector CFF needs full loop-energy rank after pinching; got rank {total_rank} for {n_loops} loops'
+            'Lower-sector CFF cannot localize a zero-rank denominator component'
         )
 
     components = _lower_cff_component_bundles(parsed)
@@ -1803,7 +1835,7 @@ def build_lower_sector_cff_bundle(parsed: ParsedGraph) -> ExpressionBundle:
         targets = list(target_template)
         for edge_id in global_basis:
             targets[int(edge_id)] = partial['targets'][int(edge_id)]
-        loop_exprs = solve_loop_energy_from_target_edge_exprs(signatures, global_basis, targets, len(parsed.ext_names))
+        loop_exprs = solve_loop_energy_particular_from_target_edge_exprs(signatures, global_basis, targets, len(parsed.ext_names))
         edge_exprs = list(target_template)
         for edge_id, expr in partial['edge_exprs'].items():
             edge_exprs[int(edge_id)] = expr
@@ -2319,35 +2351,24 @@ def build_bounded_degree_cff_bundle(parsed, energy_degree_bounds):
             'with family=hybrid, which implements the repeated-channel finite-difference lift.'
         )
 
+    if high_edges:
+        try:
+            return build_known_factor_bounded_cff_bundle(parsed, bounds, report)
+        except NotImplementedError as exc:
+            raise NotImplementedError(
+                'Pure CFF bounded-degree lift could not build the lower contact completion '
+                f'for energy-degree bounds {list(bounds)}: {exc}'
+            ) from exc
+
     if (
         len(parsed.loop_names) == 1
     ):
-        if high_edges:
-            single_cubic_with_affine_spectators = (
-                len(high_edges) == 1
-                and int(bounds[high_edges[0]]) == 3
-                and all(int(bound) <= 1 for idx, bound in enumerate(bounds) if idx != high_edges[0])
-            )
-            if not single_cubic_with_affine_spectators:
-                raise NotImplementedError(
-                    'Pure CFF bounded-degree lift keeps E-surface denominators for arbitrary '
-                    'quadratic caps and for a single cubic cap with only affine spectator caps.  '
-                    'Mixed cubic/quadratic sectors and quartic-or-higher caps are not exposed '
-                    'because their lower contact sectors require infinity/contact completion.'
-                )
-            return build_known_factor_bounded_cff_bundle(parsed, bounds, report)
         if has_duplicate_signature:
             return build_quadratic_general_bounded_cff_bundle(parsed, bounds, report)
         return build_quadratic_e_surface_bounded_cff_bundle(parsed, bounds, report)
 
     if not high_edges:
         return build_quadratic_general_bounded_cff_bundle(parsed, bounds, report)
-
-    raise NotImplementedError(
-        'Pure CFF bounded-degree lift keeps E-surface denominators for arbitrary quadratic caps.  '
-        'Higher caps in multiloop sectors are not exposed because their lower contact sectors '
-        'require infinity/contact completion.'
-    )
 
 def build_pure_ltd_bundle(signatures,n_external_symbols=None):
     n_internal=len(signatures); n_loops=len(signatures[0][0]); n_external_symbols=n_external_symbols if n_external_symbols is not None else len(signatures[0][1]); sb=SurfaceCacheBuilder(); terms=[]; bc=0

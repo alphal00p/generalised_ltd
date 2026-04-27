@@ -35,9 +35,14 @@ def _min_eval(d, E_vals, OSE_vals):
 def _compress_chains(chains: List[Tuple[int, ...]]):
     nodes: List[Dict[str, Any]] = []
     root_map: Dict[int, int] = {}
+    unit_root: Optional[int] = None
     def add_chain(chain, idxmap):
+        nonlocal unit_root
         if not chain:
-            return None
+            if unit_root is None:
+                unit_root = len(nodes)
+                nodes.append({'surfaces': [], 'children': []})
+            return unit_root
         head = int(chain[0])
         if head not in idxmap:
             idx = len(nodes)
