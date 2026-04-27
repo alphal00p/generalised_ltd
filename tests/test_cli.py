@@ -18,7 +18,7 @@ from src.orientation_bundle import (
 )
 from src.structure import minimal_structure_from_bundle, evaluate_minimal_bundle
 from src.structure import numerator_from_expr
-from hybrid3d import _profile_warnings, auto_numerator_expr_for_bounds
+from generalised_ltd import _profile_warnings, auto_numerator_expr_for_bounds
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BOX_MASSES = {"m1":0.8,"m2":1.1,"m3":0.9,"m4":1.2}
@@ -253,7 +253,7 @@ def test_graph_from_signatures_cli_stdout_round_trips_prop_expression():
     proc = subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'graph_from_signatures',
             '--signatures',
             expr,
@@ -277,7 +277,7 @@ def test_graph_from_signatures_cli_writes_vakint_dot_file(tmp_path):
     subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'graph_from_signatures',
             '--signatures',
             expr,
@@ -313,7 +313,7 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
     subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'build',
             '--family',
             'cff',
@@ -329,7 +329,7 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
     compiled = subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'compile',
             '--orientation-json',
             str(json_path),
@@ -369,7 +369,7 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
     internal = subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'evaluate',
             '--orientation-json',
             str(json_path),
@@ -389,7 +389,7 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
     symbolica = subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'evaluate',
             '--orientation-json',
             str(json_path),
@@ -410,7 +410,7 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
     eager = subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'evaluate',
             '--orientation-json',
             str(json_path),
@@ -430,7 +430,7 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
     eager_symjit = subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'evaluate',
             '--orientation-json',
             str(json_path),
@@ -453,7 +453,7 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
     profiled = subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'evaluate',
             '--orientation-json',
             str(json_path),
@@ -483,7 +483,7 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
     profile_table = subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'evaluate',
             '--orientation-json',
             str(json_path),
@@ -520,7 +520,7 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
     stability = subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'evaluate',
             '--orientation-json',
             str(json_path),
@@ -547,7 +547,7 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
     stability_table = subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'evaluate',
             '--orientation-json',
             str(json_path),
@@ -576,7 +576,7 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
     builtin_profiled = subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'evaluate',
             '--orientation-json',
             str(json_path),
@@ -608,7 +608,7 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
     subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'compile',
             '--orientation-json',
             str(json_path),
@@ -637,7 +637,7 @@ def test_symbolica_compile_and_evaluate_cli_matches_builtin_double(tmp_path):
     complex_symbolica = subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'evaluate',
             '--orientation-json',
             str(complex_json),
@@ -666,7 +666,7 @@ def test_symbolica_hybrid_compile_matches_builtin_double(tmp_path):
     subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'build',
             '--family',
             'hybrid',
@@ -682,7 +682,7 @@ def test_symbolica_hybrid_compile_matches_builtin_double(tmp_path):
     subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'compile',
             '--orientation-json',
             str(json_path),
@@ -707,7 +707,7 @@ def test_symbolica_hybrid_compile_matches_builtin_double(tmp_path):
     internal = subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'evaluate',
             '--orientation-json',
             str(json_path),
@@ -727,7 +727,7 @@ def test_symbolica_hybrid_compile_matches_builtin_double(tmp_path):
     symbolica = subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'evaluate',
             '--orientation-json',
             str(json_path),
@@ -751,7 +751,7 @@ def test_symbolica_evaluate_errors_without_compiled_metadata(tmp_path):
     subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'build',
             '--family',
             'cff',
@@ -767,7 +767,7 @@ def test_symbolica_evaluate_errors_without_compiled_metadata(tmp_path):
     proc = subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'evaluate',
             '--orientation-json',
             str(json_path),
@@ -1473,7 +1473,7 @@ def test_cli_test_accepts_common_energy_degree_bounds_for_repeated_topology():
     proc = subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'test',
             '--dot',
             str(ROOT / 'examples' / 'graphs' / 'box_pow3.dot'),
@@ -1509,7 +1509,7 @@ def test_cli_build_auto_numerator_records_metadata():
     proc = subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'build',
             '--dot',
             str(ROOT / 'examples' / 'graphs' / 'box_pow3.dot'),
@@ -1531,7 +1531,7 @@ def test_cli_test_auto_numerator_with_repeated_cubic_quartic_bounds():
     proc = subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'test',
             '--dot',
             str(ROOT / 'examples' / 'graphs' / 'box_pow3.dot'),
@@ -1560,7 +1560,7 @@ def test_cli_test_auto_numerator_with_affine_caps_uses_bounded_hybrid_samples():
     proc = subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'test',
             '--dot',
             str(ROOT / 'examples' / 'graphs' / 'box_pow3.dot'),
@@ -1754,7 +1754,7 @@ def test_cli_test_cff_ltd_auto_numerator_for_bounded_box():
     proc = subprocess.run(
         [
             sys.executable,
-            str(ROOT / 'hybrid3d.py'),
+            str(ROOT / 'generalised_ltd.py'),
             'test-cff-ltd',
             '--dot',
             str(ROOT / 'examples' / 'graphs' / 'box.dot'),
@@ -1782,7 +1782,7 @@ def test_cli_evaluate_auto_numerator_uses_json_energy_bounds(tmp_path):
     json_path.write_text(json.dumps(data))
     base_cmd = [
         sys.executable,
-        str(ROOT / 'hybrid3d.py'),
+        str(ROOT / 'generalised_ltd.py'),
         'evaluate',
         '--orientation-json',
         str(json_path),

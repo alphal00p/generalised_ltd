@@ -37,12 +37,12 @@ build_and_compile() {
   local so="$OUT/${family}.so"
   local compile_cmd
 
-  run python3 hybrid3d.py build \
+  run python3 generalised_ltd.py build \
     --family "$family" \
     --dot "$DOT" \
     --json-out "$json"
 
-  compile_cmd=(python3 hybrid3d.py compile \
+  compile_cmd=(python3 generalised_ltd.py compile \
     --orientation-json "$json" \
     --dot "$DOT" \
     --numerator-expr "1" \
@@ -67,7 +67,7 @@ build_and_compile ltd
 build_and_compile cff
 
 section "Profile all available Symbolica evaluator modes"
-printf '\n$ python3 hybrid3d.py evaluate --orientation-json %q --profile-label ltd --profile-json cff=%q --dot %q --masses %q --evaluator-backend symbolica --profiling %q --seed %q | tee %q\n' \
+printf '\n$ python3 generalised_ltd.py evaluate --orientation-json %q --profile-label ltd --profile-json cff=%q --dot %q --masses %q --evaluator-backend symbolica --profiling %q --seed %q | tee %q\n' \
   "$OUT/ltd.json" \
   "$OUT/cff.json" \
   "$DOT" \
@@ -75,7 +75,7 @@ printf '\n$ python3 hybrid3d.py evaluate --orientation-json %q --profile-label l
   "$BATCH" \
   "$SEED" \
   "$OUT/profile_table.txt"
-python3 hybrid3d.py evaluate \
+python3 generalised_ltd.py evaluate \
   --orientation-json "$OUT/ltd.json" \
   --profile-label ltd \
   --profile-json "cff=$OUT/cff.json" \

@@ -1,6 +1,6 @@
-# hybrid3d DOT toolkit
+# generalised_ltd DOT toolkit
 
-`hybrid3d.py` builds, prints, exports, and evaluates JSON representations for
+`generalised_ltd.py` builds, prints, exports, and evaluates JSON representations for
 LTD, pure CFF, and the current hybrid LTD/CFF construction for repeated
 propagator channels.
 
@@ -13,21 +13,21 @@ DOT `pow` attribute.
 Validate a graph:
 
 ```bash
-python3 hybrid3d.py validate --dot examples/graphs/box_pow3.dot
+python3 generalised_ltd.py validate --dot examples/graphs/box_pow3.dot
 ```
 
 Build a structure:
 
 ```bash
-python3 hybrid3d.py build --family ltd --dot examples/graphs/box.dot --pretty
-python3 hybrid3d.py build --family cff --dot examples/graphs/box.dot --pretty
-python3 hybrid3d.py build --family hybrid --dot examples/graphs/box_pow3.dot --pretty
+python3 generalised_ltd.py build --family ltd --dot examples/graphs/box.dot --pretty
+python3 generalised_ltd.py build --family cff --dot examples/graphs/box.dot --pretty
+python3 generalised_ltd.py build --family hybrid --dot examples/graphs/box_pow3.dot --pretty
 ```
 
 Build a DOT graph from a propagator-signature expression:
 
 ```bash
-python3 hybrid3d.py graph_from_signatures \
+python3 generalised_ltd.py graph_from_signatures \
   --signatures 'prop(k1+p1,mA)*prop(k1+p1-q1,mB)*prop(k1-p2+q2,mC)*prop(k1,mD)' \
   --dot-output demo/from_signatures.dot
 ```
@@ -81,7 +81,7 @@ and profiles every Symbolica evaluator mode stored in the JSON.
 Inspect one orientation in detail:
 
 ```bash
-python3 hybrid3d.py build --family cff --dot examples/graphs/box.dot \
+python3 generalised_ltd.py build --family cff --dot examples/graphs/box.dot \
   --energy-degree-bounds 0:2,1:2,2:2 \
   --pretty --show-details-for-orientation --++ --no-color
 ```
@@ -89,10 +89,10 @@ python3 hybrid3d.py build --family cff --dot examples/graphs/box.dot \
 Export and evaluate JSON:
 
 ```bash
-python3 hybrid3d.py build --family hybrid --dot examples/graphs/box_pow3.dot \
+python3 generalised_ltd.py build --family hybrid --dot examples/graphs/box_pow3.dot \
   --json-out demo/box_hybrid.json
 
-python3 hybrid3d.py evaluate \
+python3 generalised_ltd.py evaluate \
   --orientation-json demo/box_hybrid.json \
   --dot examples/graphs/box_pow3.dot \
   --external '[[0.3,0.1,-0.2,0.05],[-0.15,0.2,0.05,-0.1],[0.25,-0.1,0.15,0.07]]' \
@@ -104,20 +104,20 @@ python3 hybrid3d.py evaluate \
 Compile a fixed-numerator Symbolica evaluator and use it:
 
 ```bash
-python3 hybrid3d.py compile \
+python3 generalised_ltd.py compile \
   --orientation-json demo/box_hybrid.json \
   --dot examples/graphs/box_pow3.dot \
   --numerator-expr 'dot(edges[0], ext[0]) + dot(edges[3], ext[0])' \
   --value-type real \
   --display-expression
 
-python3 hybrid3d.py evaluate \
+python3 generalised_ltd.py evaluate \
   --orientation-json demo/box_hybrid.json \
   --dot examples/graphs/box_pow3.dot \
   --evaluator-backend symbolica_compiled \
   --masses '{"m1":0.8,"m2":1.1,"m3":0.9,"m4":1.2}'
 
-python3 hybrid3d.py evaluate \
+python3 generalised_ltd.py evaluate \
   --orientation-json demo/box_hybrid.json \
   --dot examples/graphs/box_pow3.dot \
   --evaluator-backend symbolica_eager_symjit \
@@ -132,7 +132,7 @@ uses a batch size of 100.
 Compare several compiled JSON evaluators in one timing table:
 
 ```bash
-python3 hybrid3d.py evaluate \
+python3 generalised_ltd.py evaluate \
   --orientation-json demo/box_ltd.json \
   --profile-label ltd \
   --profile-json cff=demo/box_cff.json \
@@ -146,7 +146,7 @@ python3 hybrid3d.py evaluate \
 Monitor decimal precision loss with the saved Symbolica eager evaluator:
 
 ```bash
-python3 hybrid3d.py evaluate \
+python3 generalised_ltd.py evaluate \
   --orientation-json demo/box_ltd.json \
   --profile-label ltd \
   --profile-json cff=demo/box_cff.json \
@@ -178,16 +178,16 @@ order, constants, and function map before compilation.
 Run diagnostics:
 
 ```bash
-python3 hybrid3d.py test --dot examples/graphs/proper_iterated_sandwiched_bubble.dot \
+python3 generalised_ltd.py test --dot examples/graphs/proper_iterated_sandwiched_bubble.dot \
   --masses '{"mA":0.8,"mB":0.9,"mC":1.1,"mD":0.75,"mE":1.0,"mF":0.6}' \
   --numerator-expr 'dot(edges[1], ext[0]) + dot(edges[4], ext[0])'
 
-python3 hybrid3d.py test --dot examples/graphs/box_pow3.dot \
+python3 generalised_ltd.py test --dot examples/graphs/box_pow3.dot \
   --energy-degree-bounds 0:1,1:1,2:0,3:4 \
   --numerator-expr 'edges[0][0] * edges[1][0] * edges[3][0]**4' \
   --dps 80
 
-python3 hybrid3d.py test-cff-ltd --dot examples/graphs/box.dot \
+python3 generalised_ltd.py test-cff-ltd --dot examples/graphs/box.dot \
   --energy-degree-bounds 0:2,1:2,2:2 \
   --numerator-expr 'edges[0][0]**2 * edges[1][0]**2 * edges[2][0]**2' \
   --dps 80
@@ -243,7 +243,7 @@ as `(e)` or `(h)`.
 each edge in the numerator:
 
 ```bash
-python3 hybrid3d.py build --family cff --dot examples/graphs/box.dot \
+python3 generalised_ltd.py build --family cff --dot examples/graphs/box.dot \
   --energy-degree-bounds 0:2,1:2,2:2 --pretty --no-color
 ```
 
@@ -267,7 +267,7 @@ Unspecified edges receive degree zero and contribute no factor.  For example,
 on `box_pow3.dot`,
 
 ```bash
-python3 hybrid3d.py test --dot examples/graphs/box_pow3.dot \
+python3 generalised_ltd.py test --dot examples/graphs/box_pow3.dot \
   --energy-degree-bounds 3:3,4:4 --numerator-expr auto
 ```
 
@@ -339,15 +339,15 @@ orientation variant:
 Representative CLI checks:
 
 ```bash
-python3 hybrid3d.py build --family cff \
+python3 generalised_ltd.py build --family cff \
   --dot examples/graphs/box_pow3.dot \
   --energy-degree-bounds 3:4 --pretty --show-details
 
-python3 hybrid3d.py build --family cff \
+python3 generalised_ltd.py build --family cff \
   --dot examples/graphs/sunrise_pow4.dot \
   --energy-degree-bounds 2:5 --pretty --show-details
 
-python3 hybrid3d.py test \
+python3 generalised_ltd.py test \
   --dot examples/graphs/sunrise_pow4.dot \
   --energy-degree-bounds 2:5 --numerator-expr auto
 ```

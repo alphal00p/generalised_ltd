@@ -97,13 +97,13 @@ build_and_compile() {
   local bounds="$4"
   local json="$5"
   local so="$6"
-  local build_cmd=(python3 hybrid3d.py build --family "$family" --dot "$dot" --json-out "$json")
+  local build_cmd=(python3 generalised_ltd.py build --family "$family" --dot "$dot" --json-out "$json")
   if [[ -n "$bounds" ]]; then
     build_cmd+=(--energy-degree-bounds "$bounds")
   fi
   run "${build_cmd[@]}"
 
-  local compile_cmd=(python3 hybrid3d.py compile --orientation-json "$json" --dot "$dot" --numerator-expr "$numerator" --value-type real --output "$so" --n-cores "$N_CORES")
+  local compile_cmd=(python3 generalised_ltd.py compile --orientation-json "$json" --dot "$dot" --numerator-expr "$numerator" --value-type real --output "$so" --n-cores "$N_CORES")
   while IFS= read -r extra; do
     [[ -n "$extra" ]] && compile_cmd+=("$extra")
   done < <(compile_extra_args)
@@ -138,7 +138,7 @@ profile_scenario() {
   build_and_compile cff "$dot" "$numerator" "$bounds" "$scenario_dir/cff.json" "$scenario_dir/cff.so"
   build_and_compile hybrid "$dot" "$numerator" "$bounds" "$scenario_dir/hybrid.json" "$scenario_dir/hybrid.so"
 
-  printf '\n$ python3 hybrid3d.py evaluate --orientation-json %q --profile-label ltd --profile-json cff=%q --profile-json hybrid=%q --dot %q --masses %q --use-symbolica --profiling %q --seed %q | tee %q\n' \
+  printf '\n$ python3 generalised_ltd.py evaluate --orientation-json %q --profile-label ltd --profile-json cff=%q --profile-json hybrid=%q --dot %q --masses %q --use-symbolica --profiling %q --seed %q | tee %q\n' \
     "$scenario_dir/ltd.json" \
     "$scenario_dir/cff.json" \
     "$scenario_dir/hybrid.json" \
@@ -147,7 +147,7 @@ profile_scenario() {
     "$BATCH" \
     "$SEED" \
     "$scenario_dir/profile_table.txt"
-  python3 hybrid3d.py evaluate \
+  python3 generalised_ltd.py evaluate \
     --orientation-json "$scenario_dir/ltd.json" \
     --profile-label ltd \
     --profile-json "cff=$scenario_dir/cff.json" \
@@ -159,7 +159,7 @@ profile_scenario() {
     --seed "$SEED" \
     | tee "$scenario_dir/profile_table.txt"
 
-  printf '\n$ python3 hybrid3d.py evaluate --orientation-json %q --profile-label ltd --profile-json cff=%q --profile-json hybrid=%q --dot %q --masses %q --stability --seed %q --no-color | tee %q\n' \
+  printf '\n$ python3 generalised_ltd.py evaluate --orientation-json %q --profile-label ltd --profile-json cff=%q --profile-json hybrid=%q --dot %q --masses %q --stability --seed %q --no-color | tee %q\n' \
     "$scenario_dir/ltd.json" \
     "$scenario_dir/cff.json" \
     "$scenario_dir/hybrid.json" \
@@ -167,7 +167,7 @@ profile_scenario() {
     "$masses" \
     "$SEED" \
     "$scenario_dir/stability_table.txt"
-  python3 hybrid3d.py evaluate \
+  python3 generalised_ltd.py evaluate \
     --orientation-json "$scenario_dir/ltd.json" \
     --profile-label ltd \
     --profile-json "cff=$scenario_dir/cff.json" \
