@@ -1875,19 +1875,19 @@ The surface cache stores both a compact expression and structured terms:
 "surface_origin": "physical",
 "singularity": "physical"
 \end{lstlisting}
-\texttt{surface\_origin="helper"} marks factors introduced by interpolation,
-known-factor reconstruction, finite-pole recursion, terminal sectors, or
-lower-sector CFF minors.  \texttt{singularity="spurious"} is an algorithmic
-marker for a helper factor that is not one of the original causal surfaces,
-for example a factor containing \(M\), a non-unit OSE coefficient, or a
-polynomial reconstruction factor.  Lower-sector CFF causal surfaces can have
-\texttt{surface\_origin="helper"} but
-\texttt{singularity="physical"}.  In pretty output the class tag adds
+\texttt{surface\_origin="helper"} is reserved for factors introduced by
+interpolation, known-factor reconstruction, finite-pole recursion, or terminal
+sectors.  CFF causal surfaces emitted by the original graph or by a
+lower-sector CFF component are still classified as
+\texttt{surface\_origin="physical"}, because they are genuine causal thresholds
+of the denominator set being evaluated.  \texttt{singularity="spurious"} is an
+algorithmic marker for a helper factor that is not one of those causal
+surfaces, for example a factor containing \(M\), a non-unit OSE coefficient, or
+a polynomial reconstruction factor.  In pretty output the class tag adds
 \texttt{\_h} for helper origin and \texttt{\_sp} for the spurious marker, while
-parentheses still mean numerator-only.  Thus \texttt{e\_h} is a helper-origin
-E-surface with physical threshold meaning and \texttt{(e\_h\_sp)} is a
-numerator-only helper factor.  Pure CFF denominator trees are tested not to
-contain \texttt{\_sp} surfaces.
+parentheses still mean numerator-only.  Thus \texttt{e} is a physical
+denominator E-surface and \texttt{(e\_h\_sp)} is a numerator-only helper factor.
+Pure CFF denominator trees are tested not to contain \texttt{\_sp} surfaces.
 
 After the UV check, the guaranteed support is:
 \begin{center}

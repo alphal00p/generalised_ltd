@@ -148,8 +148,7 @@ def _surface_classification(surface) -> Tuple[str, str]:
     label = str(getattr(surface, 'label', ''))
     expr = surface.expr
     helper_prefixes = (
-        'known-base:', 'pinch', 'qrem', 'qcontact', 'known-factor', 'contact-q',
-        'remainder-', 'terminal-unit', 'lower-cff', 'bounded-', 'helper-'
+        'known-factor', 'contact-q', 'remainder-', 'terminal-unit', 'bounded-', 'helper-'
     )
     origin = 'helper' if label.startswith(helper_prefixes) else 'physical'
     non_unit_ose = any(abs(int(coeff)) != 1 for _, coeff in expr.internal_terms)

@@ -235,9 +235,10 @@ Pretty labels use:
 - `x`: a non-trivial linear map, shown in detail with `--show-details`.
 
 Surface classes are printed as `e` or `h`; numerator-only surfaces are printed
-as `(e)` or `(h)`. Helper-origin surfaces add `_h`, and algorithmic helper
-factors that are not original causal surfaces add `_sp`, for example `e_h` or
-`(e_h_sp)`.
+as `(e)` or `(h)`. Causal denominator surfaces from the graph or a lower-sector
+CFF component remain physical `e`/`h` surfaces. Interpolation or reconstruction
+helpers add `_h`, and helper factors that are not original causal surfaces add
+`_sp`, for example `(e_h_sp)`.
 
 ## Energy-Degree Bounds
 
