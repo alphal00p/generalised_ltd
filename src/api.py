@@ -30,34 +30,37 @@ def validate_graph(dot) -> dict:
     return VAL.validate_parsed_graph(parsed)
 
 
-def _build_bundle(parsed, family: str, energy_degree_bounds=None):
+def _build_bundle(parsed, family: str, energy_degree_bounds=None, uniform_numerator_sampling_scale: str = 'none'):
     if family == 'ltd':
         if energy_degree_bounds is not None:
             assert_energy_uv_convergent(tuple(e.signature for e in parsed.internal_edges), energy_degree_bounds)
         return build_pure_ltd_bundle(tuple(e.signature for e in parsed.internal_edges), len(parsed.ext_names)), 'bundle'
     if family == 'cff':
         if energy_degree_bounds is not None:
-            return build_bounded_degree_cff_bundle(parsed, energy_degree_bounds), 'bounded_degree_bundle'
+            return build_bounded_degree_cff_bundle(parsed, energy_degree_bounds, uniform_numerator_sampling_scale=uniform_numerator_sampling_scale), 'bounded_degree_bundle'
         return build_pure_cff_bundle(parsed), 'bundle'
     if energy_degree_bounds is not None:
         bounds = normalize_energy_degree_bounds(energy_degree_bounds, len(parsed.internal_edges))
         assert_energy_uv_convergent(tuple(e.signature for e in parsed.internal_edges), bounds)
         if not GIO.repeated_groups(parsed):
             return build_pure_ltd_bundle(tuple(e.signature for e in parsed.internal_edges), len(parsed.ext_names)), 'bounded_degree_ltd_collapse'
-        return build_hybrid_bundle_raw(parsed, energy_degree_bounds=bounds), 'bounded_degree_hybrid_bundle'
-    return build_hybrid_bundle_raw(parsed), 'bundle'
+        return build_hybrid_bundle_raw(parsed, energy_degree_bounds=bounds, uniform_numerator_sampling_scale=uniform_numerator_sampling_scale), 'bounded_degree_hybrid_bundle'
+    return build_hybrid_bundle_raw(parsed, uniform_numerator_sampling_scale=uniform_numerator_sampling_scale), 'bundle'
 
 
-def build_structure(dot, family: str, energy_degree_bounds=None) -> dict:
+def build_structure(dot, family: str, energy_degree_bounds=None, uniform_numerator_sampling_scale: str = 'none') -> dict:
     parsed = GIO.parse_dot_graph(dot)
     validation = VAL.validate_parsed_graph(parsed)
-    bundle, backend = _build_bundle(parsed, family, energy_degree_bounds)
+    bundle, backend = _build_bundle(parsed, family, energy_degree_bounds, uniform_numerator_sampling_scale=uniform_numerator_sampling_scale)
     data = ST.minimal_structure_from_bundle(bundle, parsed, backend, family, validation)
     data['graph'].update(GIO.graph_info(parsed))
     if energy_degree_bounds is not None:
         bounds = normalize_energy_degree_bounds(energy_degree_bounds, len(parsed.internal_edges))
         data['graph']['energy_degree_bounds'] = list(bounds)
         data['graph']['energy_divergence'] = energy_divergence_report(tuple(e.signature for e in parsed.internal_edges), bounds)
+    if str(uniform_numerator_sampling_scale or 'none') != 'none':
+        data['graph']['uniform_numerator_sampling_scale'] = str(uniform_numerator_sampling_scale)
+        data['graph']['uniform_scale_symbol'] = 'M'
     return data
 
 
@@ -86,10 +89,10 @@ def _random_default_inputs(dot, seed: int = 1337):
     return ext4, loop3, masses
 
 
-def evaluate_structure(data: dict, dot, ext4, loop3, numerator_expr: str, dps: int = 80, mass_map: Optional[Dict[str, Any]] = None):
+def evaluate_structure(data: dict, dot, ext4, loop3, numerator_expr: str, dps: int = 80, mass_map: Optional[Dict[str, Any]] = None, uniform_scale=None):
     mp.mp.dps = dps
     num_fn = ST.numerator_from_expr(numerator_expr)
-    return ST.evaluate_minimal_bundle(data, dot, ext4, loop3, num_fn, mass_map=mass_map)
+    return ST.evaluate_minimal_bundle(data, dot, ext4, loop3, num_fn, mass_map=mass_map, uniform_scale=uniform_scale)
 
 
 def _extrapolate_last_split_value(seq):
@@ -114,7 +117,7 @@ def compare_cff_ltd(dot, ext4, loop3, numerator_expr: str, dps: int = 80, mass_m
         'numerator': numerator_expr,
     }
 
-def compare_three_modes(dot, ext4, loop3, numerator_expr: str, dps: int = 80, epsilons=('0.1', '0.05', '0.025', '0.0125'), mass_map: Optional[Dict[str, Any]] = None, cff_data: Optional[dict] = None, hybrid_data: Optional[dict] = None, cff_energy_degree_bounds=None, energy_degree_bounds=None):
+def compare_three_modes(dot, ext4, loop3, numerator_expr: str, dps: int = 80, epsilons=('0.1', '0.05', '0.025', '0.0125'), mass_map: Optional[Dict[str, Any]] = None, cff_data: Optional[dict] = None, hybrid_data: Optional[dict] = None, cff_energy_degree_bounds=None, energy_degree_bounds=None, uniform_numerator_sampling_scale: str = 'none', uniform_scales=None):
     mp.mp.dps = dps
     parsed_merged = GIO.parse_dot_graph(dot)
     common_bounds = energy_degree_bounds
@@ -146,7 +149,7 @@ def compare_three_modes(dot, ext4, loop3, numerator_expr: str, dps: int = 80, ep
     }
     has_repeated = bool(GIO.repeated_groups(parsed_merged))
 
-    return {
+    report = {
         'cff': str(cff_val),
         'hybrid': str(hybrid_val),
         'abs_cff_minus_hybrid': str(abs(cff_val - hybrid_val)),
@@ -160,6 +163,30 @@ def compare_three_modes(dot, ext4, loop3, numerator_expr: str, dps: int = 80, ep
         'split_ltd': seq,
         'numerator': numerator_expr,
     }
+    uniform_mode = str(uniform_numerator_sampling_scale or 'none')
+    if uniform_mode != 'none':
+        scales = tuple(uniform_scales) if uniform_scales is not None else ('1.0', '2.75')
+        uniform_cff = build_structure(dot, 'cff', energy_degree_bounds=cff_bounds, uniform_numerator_sampling_scale=uniform_mode)
+        uniform_hybrid = build_structure(dot, 'hybrid', energy_degree_bounds=common_bounds, uniform_numerator_sampling_scale=uniform_mode)
+        uniform_items = []
+        for scale in scales:
+            ucff_val = evaluate_structure(uniform_cff, dot, ext4, loop3, numerator_expr, dps, mass_map, uniform_scale=scale)
+            uhyb_val = evaluate_structure(uniform_hybrid, dot, ext4, loop3, numerator_expr, dps, mass_map, uniform_scale=scale)
+            uniform_items.append({
+                'uniform_scale': str(scale),
+                'cff': str(ucff_val),
+                'hybrid': str(uhyb_val),
+                'abs_uniform_cff_minus_default_cff': str(abs(ucff_val - cff_val)),
+                'abs_uniform_hybrid_minus_default_hybrid': str(abs(uhyb_val - hybrid_val)),
+                'abs_uniform_cff_minus_uniform_hybrid': str(abs(ucff_val - uhyb_val)),
+            })
+        report['uniform_sampling'] = {
+            'mode': uniform_mode,
+            'scales': uniform_items,
+            'cff_orientations': len(uniform_cff.get('orientations', [])),
+            'hybrid_orientations': len(uniform_hybrid.get('orientations', [])),
+        }
+    return report
 
 def run_cff_ltd_test(dot, ext4=None, loop3=None, numerator_expr: str = '1', dps: int = 80, mass_map: Optional[Dict[str, Any]] = None, seed: int = 1337, energy_degree_bounds=None, cff_data: Optional[dict] = None, ltd_data: Optional[dict] = None):
     rnd_ext4, rnd_loop3, rnd_masses = _random_default_inputs(dot, seed)
@@ -174,14 +201,28 @@ def run_cff_ltd_test(dot, ext4=None, loop3=None, numerator_expr: str = '1', dps:
     report['masses'] = masses
     return report
 
-def run_test(dot, ext4=None, loop3=None, numerator_expr: str = '1', dps: int = 80, epsilons=('0.1', '0.05', '0.025', '0.0125'), mass_map: Optional[Dict[str, Any]] = None, seed: int = 1337, cff_data: Optional[dict] = None, hybrid_data: Optional[dict] = None, cff_energy_degree_bounds=None, energy_degree_bounds=None):
+def run_test(dot, ext4=None, loop3=None, numerator_expr: str = '1', dps: int = 80, epsilons=('0.1', '0.05', '0.025', '0.0125'), mass_map: Optional[Dict[str, Any]] = None, seed: int = 1337, cff_data: Optional[dict] = None, hybrid_data: Optional[dict] = None, cff_energy_degree_bounds=None, energy_degree_bounds=None, uniform_numerator_sampling_scale: str = 'none', uniform_scales=None):
     rnd_ext4, rnd_loop3, rnd_masses = _random_default_inputs(dot, seed)
     ext4 = rnd_ext4 if ext4 is None else ext4
     loop3 = rnd_loop3 if loop3 is None else loop3
     masses = dict(rnd_masses)
     if mass_map:
         masses.update({str(k): v for k, v in mass_map.items()})
-    report = compare_three_modes(dot, ext4, loop3, numerator_expr, dps, epsilons, masses, cff_data=cff_data, hybrid_data=hybrid_data, cff_energy_degree_bounds=cff_energy_degree_bounds, energy_degree_bounds=energy_degree_bounds)
+    report = compare_three_modes(
+        dot,
+        ext4,
+        loop3,
+        numerator_expr,
+        dps,
+        epsilons,
+        masses,
+        cff_data=cff_data,
+        hybrid_data=hybrid_data,
+        cff_energy_degree_bounds=cff_energy_degree_bounds,
+        energy_degree_bounds=energy_degree_bounds,
+        uniform_numerator_sampling_scale=uniform_numerator_sampling_scale,
+        uniform_scales=uniform_scales,
+    )
     report['external'] = [list(x) for x in ext4]
     report['loop3'] = [list(x) for x in loop3]
     report['masses'] = masses

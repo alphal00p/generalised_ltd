@@ -92,6 +92,16 @@ def _render_surface_expr(expr_container: Dict[str, Any], use_color: bool = True,
         else:
             mult = c(str(abs(int(coeff))), Fore.YELLOW + Style.BRIGHT, use_color) + c('*', Fore.WHITE, use_color) + name
             parts.append((mult, int(coeff) < 0))
+    m_coeff = int(expr.get('m', 0) or 0)
+    if m_coeff:
+        name = c('M', Fore.BLUE + Style.BRIGHT, use_color)
+        if m_coeff == -1:
+            parts.append((name, True))
+        elif m_coeff == 1:
+            parts.append((name, False))
+        else:
+            mult = c(str(abs(m_coeff)), Fore.YELLOW + Style.BRIGHT, use_color) + c('*', Fore.WHITE, use_color) + name
+            parts.append((mult, m_coeff < 0))
     if not parts:
         return c('0', Fore.YELLOW + Style.BRIGHT, use_color)
     out = (c('-', Fore.RED + Style.BRIGHT, use_color) + ' ' if parts[0][1] else '') + parts[0][0]
@@ -154,6 +164,10 @@ def render_pretty(
     kind_map = {int(s['id']): s['k'] for s in data['surfaces']}
     def surface_class(surf: Dict[str, Any]) -> str:
         kind = str(surf['k'])
+        if surf.get('surface_origin') == 'helper':
+            kind += '_h'
+        if surf.get('singularity') == 'spurious':
+            kind += '_sp'
         return f'({kind})' if surf.get('numerator_only') else kind
 
     title = f"{data['family'].upper()} structure"
@@ -167,6 +181,9 @@ def render_pretty(
     lines.append(summary.get_string())
 
     degree_report = data.get('graph', {}).get('energy_divergence')
+    uniform_mode = data.get('graph', {}).get('uniform_numerator_sampling_scale')
+    if uniform_mode and uniform_mode != 'none':
+        lines.append('uniform_numerator_sampling_scale=' + str(uniform_mode) + '  uniform_scale_symbol=' + str(data.get('graph', {}).get('uniform_scale_symbol', 'M')))
     if degree_report:
         lines.append('\n' + c('Energy Degree Bounds', Fore.BLUE + Style.BRIGHT, use_color))
         lines.append('bounds=' + str(data['graph'].get('energy_degree_bounds', [])) + '  convergent=' + str(degree_report.get('convergent')))
@@ -248,7 +265,8 @@ def render_pretty(
         variants = _orientation_variants(orient)
         for vidx, var in enumerate(variants):
             if len(variants) > 1:
-                lines.append(c(f"variant {vidx}", Fore.BLUE + Style.BRIGHT, use_color) + f": origin={var.get('origin', 'term')} pref={var['pref']} half_edges={var['half_edges']} num_surfaces={var.get('num_surfaces', [])}")
+                scale_txt = f" M^-{var.get('uniform_scale_power', 0)}" if int(var.get('uniform_scale_power', 0) or 0) else ''
+                lines.append(c(f"variant {vidx}", Fore.BLUE + Style.BRIGHT, use_color) + f": origin={var.get('origin', 'term')} pref={var['pref']} half_edges={var['half_edges']}{scale_txt} num_surfaces={var.get('num_surfaces', [])}")
             elif var.get('num_surfaces'):
                 lines.append(c('numerator surfaces', Fore.BLUE + Style.BRIGHT, use_color) + ': ' + ', '.join(c(str(s), Fore.GREEN + Style.BRIGHT, use_color) + ':' + c(kind_map.get(int(s), '?'), Fore.MAGENTA + Style.BRIGHT, use_color) for s in var.get('num_surfaces', [])))
             for root in var['tree']['roots']:

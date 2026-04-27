@@ -34,7 +34,7 @@
 \newcommand{\Pinch}{\mathcal P}
 \newcommand{\rank}{\operatorname{rank}}
 
-\title{Hybrid Three-Dimensional LTD/CFF Representations}
+\title{Generalised Three-Dimensional LTD/CFF Representations}
 \author{Implementation and theory note}
 \date{April 2026}
 
@@ -1204,6 +1204,88 @@ makes the ordinary finite-pole/contact recursion a limiting case: for
 \(\nu=1\), \eqref{eq:channel-normal-form} is precisely the division of a
 single higher-power edge into a pole remainder and a lower contact sector.
 
+\subsection{Uniform-Scale Repeated-Channel Sampling}
+
+The default interpolation variable in
+\eqref{eq:channel-interpolation} is \(u_C=y_C/\omega_C\).  This is compact and
+is kept as the default implementation because it produces the smallest
+coefficients for the ordinary repeated-channel formula.  However, after
+\eqref{eq:channel-normal-form}, high-degree monomials can generate explicit
+inverse powers of \(\omega_C\).  These inverse powers are artificial
+interpolation factors: the complete orientation sum is independent of the
+normalization used for the interpolation nodes.  They are not physical
+propagator singularities, and for a massless representative edge they can make
+individual terms unnecessarily sensitive to a soft limit before the term sum is
+formed.
+
+The implementation therefore also supports a user-provided non-zero scale
+\(M\).  Let
+\[
+  \Samples_d=(1,-1,0,2,-2,\ldots)
+\]
+be the deterministic integer node list.  In uniform-scale mode the pure CFF
+channel interpolant is
+\begin{equation}
+  N(y_C,\ldots)
+  =
+  \sum_{a\in\Samples_{d_C}}
+  L_a(y_C/M)\,
+  N\!\left(q_{e_b}^0=s_{e_b}a\,M,\ldots\right),
+  \label{eq:uniform-channel-interpolation}
+\end{equation}
+where \(s_{e_b}=\pm1\) is the sign of member \(e_b\) relative to the channel
+representative.  The Lagrange polynomial is the same polynomial in its
+dimensionless argument:
+\[
+  L_a(v)=\sum_{r=0}^{d_C}\ell_{a,r}v^r,\qquad v=y_C/M.
+\]
+For a monomial \(r=2b+p\), \(p\in\{0,1\}\), the normal form becomes
+\begin{equation}
+  \frac{(y_C/M)^{2b+p}}{D_C^\nu}
+  =
+  \sum_{j=0}^{b}
+  \binom{b}{j}
+  \frac{y_C^p\,\omega_C^{2(b-j)}\,D_C^j}
+       {M^{2b+p}D_C^\nu}.
+  \label{eq:uniform-channel-normal-form}
+\end{equation}
+Compared with \eqref{eq:channel-normal-form}, the inverse scale is now
+\(M^{-(2b+p)}\), while positive powers of \(\omega_C\) are numerator-side
+known factors.  If \(j<\nu\), the denominator keeps \(\nu-j\) channel copies.
+If \(j\ge\nu\), the excess \(D_C^{j-\nu}\) is again serialized as numerator
+factors \((y_C-\omega_C)^{j-\nu}(y_C+\omega_C)^{j-\nu}\).  Hence the
+denominator surfaces are unchanged CFF causal surfaces; only the numerator map
+and variant prefactor gain explicit dependence on \(M\).
+
+For hybrid LTD/CFF, the same idea is applied around the localized LTD pole.
+If a repeated basis edge has sign \(\sigma=\pm1\), the finite-difference
+samples are
+\begin{equation}
+  q_C^0=\sigma\,\omega_C+aM,\qquad a\in\Samples_d ,
+  \label{eq:uniform-hybrid-samples}
+\end{equation}
+and the finite-difference weights carry \(M^{-|\beta|}\) for a
+multi-derivative index \(\beta\).  This replaces the default
+\((2\omega_C)^{-|\beta|}\) factors without changing the final summed value.
+
+The CLI exposes three policies:
+\[
+\begin{array}{ll}
+\texttt{none} & \text{use } \omega_C \text{ normalization everywhere
+  (default)},\\
+\texttt{beyond-quadratic} & \text{use } M \text{ only when the repeated-channel
+  bound is } d_C>2,\\
+\texttt{all} & \text{use } M \text{ for every repeated-channel bound }
+  d_C>1 .
+\end{array}
+\]
+The second policy keeps the quadratic case in the original compact
+\(\omega_C\)-normalized form; the third is useful when one wants all repeated
+finite-difference samples to have the same external normalization.  The
+runtime evaluator rejects \(M=0\).  Real evaluators accept positive or negative
+real \(M\).  Complex-valued Symbolica evaluators also accept complex \(M\);
+real-valued Symbolica evaluators reject it.
+
 For the two-loop \texttt{sunrise\_pow4.dot} graph, the repeated channel is
 \[
   C=\{2,3,4,5\},\qquad y_C=k_2^0,\qquad \nu=4 .
@@ -1757,6 +1839,55 @@ metadata.  For \texttt{evaluate} and \texttt{compile}, \texttt{auto} reads the
 bound vector from \texttt{graph.energy\_degree\_bounds} in the input
 orientation JSON; for \texttt{build}, \texttt{test}, \texttt{compare}, and
 \texttt{test-cff-ltd}, it uses the command-line bound vector.
+
+For repeated-channel interpolation one may additionally set
+\begin{lstlisting}
+--uniform-numerator-sampling-scale none
+--uniform-numerator-sampling-scale beyond-quadratic
+--uniform-numerator-sampling-scale all
+\end{lstlisting}
+on \texttt{build}, \texttt{test}, or \texttt{compare}.  The first value is the
+default.  In uniform modes the JSON graph block records
+\begin{lstlisting}
+"uniform_numerator_sampling_scale": "all",
+"uniform_scale_symbol": "M"
+\end{lstlisting}
+and every energy map is allowed to contain an integer coefficient
+\texttt{"m"} multiplying the runtime scale \(M\):
+\begin{lstlisting}
+{"i": [[3, 1]], "x": [[0, -1]], "m": 2, "c": "0"}
+\end{lstlisting}
+The expression above means \(\omega_3-E_0+2M\).  Variants also have an integer
+\texttt{uniform\_scale\_power}; a value \(r\) multiplies that variant by
+\(M^{-r}\).  The arbitrary-precision evaluator receives \(M\) through
+\texttt{evaluate --uniform-scale VALUE}.  The \texttt{test} command receives
+comparison scales through \texttt{--uniform-scales A,B}; if omitted, it uses
+\(M=1.0\) and \(M=2.75\).
+
+The surface cache stores both a compact expression and structured terms:
+\begin{lstlisting}
+"terms": {
+  "ose": [[edge_id, coeff]],
+  "external_shift": [[external_id, coeff]],
+  "uniform_scale": coeff,
+  "constant": "0"
+},
+"surface_origin": "physical",
+"singularity": "physical"
+\end{lstlisting}
+\texttt{surface\_origin="helper"} marks factors introduced by interpolation,
+known-factor reconstruction, finite-pole recursion, terminal sectors, or
+lower-sector CFF minors.  \texttt{singularity="spurious"} is an algorithmic
+marker for a helper factor that is not one of the original causal surfaces,
+for example a factor containing \(M\), a non-unit OSE coefficient, or a
+polynomial reconstruction factor.  Lower-sector CFF causal surfaces can have
+\texttt{surface\_origin="helper"} but
+\texttt{singularity="physical"}.  In pretty output the class tag adds
+\texttt{\_h} for helper origin and \texttt{\_sp} for the spurious marker, while
+parentheses still mean numerator-only.  Thus \texttt{e\_h} is a helper-origin
+E-surface with physical threshold meaning and \texttt{(e\_h\_sp)} is a
+numerator-only helper factor.  Pure CFF denominator trees are tested not to
+contain \texttt{\_sp} surfaces.
 
 After the UV check, the guaranteed support is:
 \begin{center}

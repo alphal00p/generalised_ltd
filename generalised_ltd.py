@@ -86,6 +86,58 @@ def parse_energy_degree_bounds(arg):
         out[key if key == '*' else int(key)] = int(value.strip())
     return out
 
+
+def parse_uniform_scales_arg(arg):
+    if arg is None:
+        return None
+    items = [item.strip() for item in str(arg).split(',') if item.strip()]
+    if not items:
+        raise SystemExit('--uniform-scales must contain at least one value')
+    return tuple(items)
+
+
+def validate_uniform_scale_arg(value):
+    if value is None:
+        return None
+    text = str(value).strip()
+    try:
+        parsed = complex(text.replace('J', 'j')) if ('j' in text.lower()) else float(text)
+    except Exception as exc:
+        raise SystemExit(f'Invalid --uniform-scale value {value!r}') from exc
+    if parsed == 0:
+        raise SystemExit('--uniform-scale must be nonzero')
+    return text
+
+
+def _uniform_scale_has_imaginary_part(value) -> bool:
+    if value is None:
+        return False
+    text = str(value).strip().replace('J', 'j')
+    if 'j' not in text:
+        return False
+    return complex(text).imag != 0
+
+
+def _reject_real_symbolica_complex_uniform_scale(metadata, uniform_scale):
+    if metadata.get('value_type') == 'real' and _uniform_scale_has_imaginary_part(uniform_scale):
+        raise SystemExit('Complex --uniform-scale requires a complex-valued Symbolica evaluator.')
+
+
+def _json_requires_uniform_scale(data: dict) -> bool:
+    if str(data.get('graph', {}).get('uniform_numerator_sampling_scale', 'none')) != 'none':
+        return True
+    for surface in data.get('surfaces', []):
+        if int(surface.get('e', {}).get('m', 0) or 0):
+            return True
+    for orient in data.get('orientations', []):
+        for variant in orient.get('variants') or [orient]:
+            if int(variant.get('uniform_scale_power', 0) or 0):
+                return True
+            for expr in list(variant.get('loop_q0', [])) + list(variant.get('edge_q0', [])):
+                if int(expr.get('m', 0) or 0):
+                    return True
+    return False
+
 def resolve_test_energy_degree_bounds(args):
     common = parse_energy_degree_bounds(getattr(args, 'energy_degree_bounds', None))
     cff_only = parse_energy_degree_bounds(getattr(args, 'cff_energy_degree_bounds', None))
@@ -229,7 +281,7 @@ def _render_stability_table(rows, use_color: bool = True) -> str:
     return str(table)
 
 
-def _stability_symbolica_targets(targets, dot, ext4, loop3, masses, input_precision: int, work_precision: int, use_color: bool):
+def _stability_symbolica_targets(targets, dot, ext4, loop3, masses, input_precision: int, work_precision: int, use_color: bool, uniform_scale=None):
     rows = []
     for label, path in targets:
         if not path.exists():
@@ -239,6 +291,8 @@ def _stability_symbolica_targets(targets, dot, ext4, loop3, masses, input_precis
             raise SystemExit(f'Stability requires a saved Symbolica eager evaluator in {path}. Run compile first.')
         graph = data.get('graph', {})
         try:
+            metadata = SYMEVAL.symbolica_evaluator_metadata(data, "symbolica_eager")
+            _reject_real_symbolica_complex_uniform_scale(metadata, uniform_scale)
             result = SYMEVAL.evaluate_symbolica_stability(
                 data,
                 dot,
@@ -248,6 +302,7 @@ def _stability_symbolica_targets(targets, dot, ext4, loop3, masses, input_precis
                 masses,
                 input_precision=input_precision,
                 work_precision=work_precision,
+                uniform_scale=uniform_scale,
             )
         except Exception as exc:
             raise SystemExit(str(exc)) from exc
@@ -278,7 +333,7 @@ def _split_backends_arg(value: str | None):
     return [item.strip() for item in value.split(',') if item.strip()]
 
 
-def _profile_symbolica_targets(targets, dot, ext4, loop3, masses, batch_size: int, use_color: bool, requested_backends=None):
+def _profile_symbolica_targets(targets, dot, ext4, loop3, masses, batch_size: int, use_color: bool, requested_backends=None, uniform_scale=None):
     if batch_size < 1:
         raise SystemExit('--profiling must be positive')
     rows = []
@@ -293,6 +348,7 @@ def _profile_symbolica_targets(targets, dot, ext4, loop3, masses, batch_size: in
             if mode not in SYMEVAL.available_symbolica_evaluator_modes(data):
                 continue
             metadata = SYMEVAL.symbolica_evaluator_metadata(data, mode)
+            _reject_real_symbolica_complex_uniform_scale(metadata, uniform_scale)
             graph = data.get('graph', {})
             repeated_groups = graph.get('repeated_groups', [])
             val, profile = SYMEVAL.evaluate_symbolica(
@@ -305,6 +361,7 @@ def _profile_symbolica_targets(targets, dot, ext4, loop3, masses, batch_size: in
                 batch_size=batch_size,
                 profile=True,
                 backend=mode,
+                uniform_scale=uniform_scale,
             )
             seconds = profile['seconds_per_sample']
             if base_seconds is None:
@@ -384,6 +441,7 @@ def cmd_build(args):
             dot,
             args.family,
             energy_degree_bounds=energy_degree_bounds,
+            uniform_numerator_sampling_scale=args.uniform_numerator_sampling_scale,
         )
     except NotImplementedError as exc:
         print(f'error: {exc}', file=sys.stderr)
@@ -413,6 +471,9 @@ def cmd_evaluate(args):
     dot = load_dot_graph(args.dot)
     numerator_expr = resolve_numerator_expr(dot, args.numerator_expr, data=data)
     ext4, loop3, masses = resolve_evaluate_inputs(dot, args)
+    uniform_scale = validate_uniform_scale_arg(getattr(args, 'uniform_scale', None))
+    if uniform_scale is None and _json_requires_uniform_scale(data):
+        raise SystemExit('This JSON uses uniform numerator sampling. Pass --uniform-scale VALUE.')
     evaluator_backend = args.evaluator_backend
     if args.use_symbolica and evaluator_backend == 'builtin':
         evaluator_backend = 'symbolica_compiled'
@@ -424,11 +485,13 @@ def cmd_evaluate(args):
         targets = [(args.profile_label, pathlib.Path(args.orientation_json))]
         targets.extend(_profile_target_from_arg(item) for item in (args.profile_json or []))
         if args.profile_json:
-            _stability_symbolica_targets(targets, dot, ext4, loop3, masses, input_precision, work_precision, use_color=not args.no_color)
+            _stability_symbolica_targets(targets, dot, ext4, loop3, masses, input_precision, work_precision, use_color=not args.no_color, uniform_scale=uniform_scale)
         else:
             json_path = pathlib.Path(args.orientation_json)
             if 'symbolica_eager' not in SYMEVAL.available_symbolica_evaluator_modes(data):
                 raise SystemExit('Stability requires a saved Symbolica eager evaluator. Run the compile subcommand first.')
+            metadata = SYMEVAL.symbolica_evaluator_metadata(data, "symbolica_eager")
+            _reject_real_symbolica_complex_uniform_scale(metadata, uniform_scale)
             result = SYMEVAL.evaluate_symbolica_stability(
                 data,
                 dot,
@@ -438,6 +501,7 @@ def cmd_evaluate(args):
                 masses,
                 input_precision=input_precision,
                 work_precision=work_precision,
+                uniform_scale=uniform_scale,
             )
             print(json.dumps(result, indent=2))
         return
@@ -453,7 +517,7 @@ def cmd_evaluate(args):
         requested = _split_backends_arg(args.profile_evaluator_backends)
         if requested is None and evaluator_backend not in {'symbolica', 'symbolica_compiled'}:
             requested = [evaluator_backend]
-        _profile_symbolica_targets(targets, dot, ext4, loop3, masses, int(args.profiling), use_color=not args.no_color, requested_backends=requested)
+        _profile_symbolica_targets(targets, dot, ext4, loop3, masses, int(args.profiling), use_color=not args.no_color, requested_backends=requested, uniform_scale=uniform_scale)
         return
     if evaluator_backend != 'builtin':
         json_path = pathlib.Path(args.orientation_json)
@@ -461,6 +525,7 @@ def cmd_evaluate(args):
             raise SystemExit('Symbolica evaluation requires --orientation-json to be a JSON file path')
         symbolica_backend = 'symbolica_compiled' if evaluator_backend == 'symbolica' else evaluator_backend
         metadata = SYMEVAL.symbolica_evaluator_metadata(data, symbolica_backend)
+        _reject_real_symbolica_complex_uniform_scale(metadata, uniform_scale)
         compiled_num = metadata.get('numerator_expr')
         if args.numerator_expr is not None and compiled_num is not None and numerator_expr != compiled_num:
             raise SystemExit(f'Compiled Symbolica numerator is {compiled_num!r}, got --numerator-expr {numerator_expr!r}')
@@ -474,6 +539,7 @@ def cmd_evaluate(args):
             batch_size=args.profiling if args.profiling is not None else 1,
             profile=args.profiling is not None,
             backend=symbolica_backend,
+            uniform_scale=uniform_scale,
         )
         if profile:
             print(json.dumps({
@@ -501,7 +567,7 @@ def cmd_evaluate(args):
         val = None
         for _ in range(SYMEVAL.DEFAULT_PROFILE_CALLS):
             for _ in range(batch_size):
-                val = ST.evaluate_minimal_bundle(data, dot, ext4, loop3, num_fn, mass_map=masses)
+                val = ST.evaluate_minimal_bundle(data, dot, ext4, loop3, num_fn, mass_map=masses, uniform_scale=uniform_scale)
         elapsed = time.perf_counter() - start
         total_evaluations = batch_size * SYMEVAL.DEFAULT_PROFILE_CALLS
         print(json.dumps({
@@ -517,7 +583,7 @@ def cmd_evaluate(args):
             'seconds_per_call': elapsed / SYMEVAL.DEFAULT_PROFILE_CALLS,
         }, indent=2))
         return
-    val = evaluate_structure(data, dot, ext4, loop3, numerator_expr, args.dps, masses)
+    val = evaluate_structure(data, dot, ext4, loop3, numerator_expr, args.dps, masses, uniform_scale=uniform_scale)
     print(val)
 
 
@@ -579,12 +645,13 @@ def cmd_compare(args):
     masses = parse_mass_map(args)
     energy_bounds, cff_energy_bounds = resolve_test_energy_degree_bounds(args)
     numerator_expr = resolve_numerator_expr(dot, args.numerator_expr, energy_degree_bounds=energy_bounds if energy_bounds is not None else cff_energy_bounds)
+    uniform_scales = parse_uniform_scales_arg(getattr(args, 'uniform_scales', None))
     if ext4 is None or loop3 is None or masses is None:
-        rep = run_test(dot, ext4=ext4, loop3=loop3, numerator_expr=numerator_expr, dps=args.dps, mass_map=masses, seed=args.seed, epsilons=parse_epsilons_arg(args.epsilons) if args.epsilons else ('0.1','0.05','0.025','0.0125'), cff_data=parse_json_arg(args.cff_json) if args.cff_json else None, hybrid_data=parse_json_arg(args.hybrid_json) if args.hybrid_json else None, cff_energy_degree_bounds=cff_energy_bounds, energy_degree_bounds=energy_bounds)
+        rep = run_test(dot, ext4=ext4, loop3=loop3, numerator_expr=numerator_expr, dps=args.dps, mass_map=masses, seed=args.seed, epsilons=parse_epsilons_arg(args.epsilons) if args.epsilons else ('0.1','0.05','0.025','0.0125'), cff_data=parse_json_arg(args.cff_json) if args.cff_json else None, hybrid_data=parse_json_arg(args.hybrid_json) if args.hybrid_json else None, cff_energy_degree_bounds=cff_energy_bounds, energy_degree_bounds=energy_bounds, uniform_numerator_sampling_scale=args.uniform_numerator_sampling_scale, uniform_scales=uniform_scales)
         txt = json.dumps(rep, indent=2)
     else:
         eps = parse_epsilons_arg(args.epsilons) if args.epsilons else ('0.1', '0.05', '0.025', '0.0125')
-        data = compare_three_modes(dot, ext4, loop3, numerator_expr, args.dps, eps, masses, cff_data=parse_json_arg(args.cff_json) if args.cff_json else None, hybrid_data=parse_json_arg(args.hybrid_json) if args.hybrid_json else None, cff_energy_degree_bounds=cff_energy_bounds, energy_degree_bounds=energy_bounds)
+        data = compare_three_modes(dot, ext4, loop3, numerator_expr, args.dps, eps, masses, cff_data=parse_json_arg(args.cff_json) if args.cff_json else None, hybrid_data=parse_json_arg(args.hybrid_json) if args.hybrid_json else None, cff_energy_degree_bounds=cff_energy_bounds, energy_degree_bounds=energy_bounds, uniform_numerator_sampling_scale=args.uniform_numerator_sampling_scale, uniform_scales=uniform_scales)
         txt = json.dumps(data, indent=2)
     if args.json_out:
         pathlib.Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
@@ -600,7 +667,8 @@ def cmd_test(args):
     eps = parse_epsilons_arg(args.epsilons) if args.epsilons else ('0.1', '0.05', '0.025', '0.0125')
     energy_bounds, cff_energy_bounds = resolve_test_energy_degree_bounds(args)
     numerator_expr = resolve_numerator_expr(dot, args.numerator_expr, energy_degree_bounds=energy_bounds if energy_bounds is not None else cff_energy_bounds)
-    rep = run_test(dot, ext4=ext4, loop3=loop3, numerator_expr=numerator_expr, dps=args.dps, mass_map=masses, seed=args.seed, epsilons=eps, cff_data=parse_json_arg(args.cff_json) if args.cff_json else None, hybrid_data=parse_json_arg(args.hybrid_json) if args.hybrid_json else None, cff_energy_degree_bounds=cff_energy_bounds, energy_degree_bounds=energy_bounds)
+    uniform_scales = parse_uniform_scales_arg(getattr(args, 'uniform_scales', None))
+    rep = run_test(dot, ext4=ext4, loop3=loop3, numerator_expr=numerator_expr, dps=args.dps, mass_map=masses, seed=args.seed, epsilons=eps, cff_data=parse_json_arg(args.cff_json) if args.cff_json else None, hybrid_data=parse_json_arg(args.hybrid_json) if args.hybrid_json else None, cff_energy_degree_bounds=cff_energy_bounds, energy_degree_bounds=energy_bounds, uniform_numerator_sampling_scale=args.uniform_numerator_sampling_scale, uniform_scales=uniform_scales)
     txt = json.dumps(rep, indent=2)
     if args.json_out:
         pathlib.Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
@@ -659,6 +727,7 @@ def main():
     b.add_argument('--dot', required=True)
     b.add_argument('--json-out')
     b.add_argument('--energy-degree-bounds', help='Per-edge EMR energy degree bounds, e.g. "0:2,3:1" or JSON')
+    b.add_argument('--uniform-numerator-sampling-scale', choices=['none', 'beyond-quadratic', 'all'], default='none', help='Use a runtime uniform scale M for repeated-channel numerator interpolation')
     b.add_argument('--numerator-expr', help='Optional numerator metadata; use "auto" with --energy-degree-bounds to record the generated edge-external dot-product numerator')
     b.add_argument('--show-json', action='store_true')
     b.add_argument('--pretty', action='store_true')
@@ -678,6 +747,7 @@ def main():
     e.add_argument('--masses')
     e.add_argument('--masses-file')
     e.add_argument('--seed', type=int, default=1337)
+    e.add_argument('--uniform-scale', help='Runtime value of the uniform numerator sampling scale M for JSONs built with --uniform-numerator-sampling-scale')
     e.add_argument('--use-symbolica', action='store_true')
     e.add_argument('--evaluator-backend', choices=['builtin', 'symbolica', 'symbolica_compiled', 'symbolica_eager', 'symbolica_eager_symjit'], default='builtin', help='Evaluator backend. "symbolica" is an alias for compiled evaluation for single runs and all available Symbolica modes in multi-JSON profiling.')
     e.add_argument('--profiling', nargs='?', const=100, type=int, help='Report timing for 10 evaluator calls over batches of this size; defaults to 100 when no size is given')
@@ -722,6 +792,8 @@ def main():
     c.add_argument('--cff-json')
     c.add_argument('--hybrid-json')
     c.add_argument('--energy-degree-bounds', help='Build CFF, hybrid, and split-mass LTD test structures with these EMR energy-degree bounds')
+    c.add_argument('--uniform-numerator-sampling-scale', choices=['none', 'beyond-quadratic', 'all'], default='none', help='Also compare uniform-M repeated-channel interpolation builds')
+    c.add_argument('--uniform-scales', help='Comma-separated M values used for uniform-M comparisons; default 1.0,2.75')
     c.add_argument('--cff-energy-degree-bounds', help='Deprecated: build only the CFF side with bounded-degree finite-pole completion')
     c.add_argument('--masses')
     c.add_argument('--masses-file')
@@ -739,6 +811,8 @@ def main():
     t.add_argument('--cff-json')
     t.add_argument('--hybrid-json')
     t.add_argument('--energy-degree-bounds', help='Build CFF, hybrid, and split-mass LTD test structures with these EMR energy-degree bounds')
+    t.add_argument('--uniform-numerator-sampling-scale', choices=['none', 'beyond-quadratic', 'all'], default='none', help='Also compare uniform-M repeated-channel interpolation builds')
+    t.add_argument('--uniform-scales', help='Comma-separated M values used for uniform-M comparisons; default 1.0,2.75')
     t.add_argument('--cff-energy-degree-bounds', help='Deprecated: build only the CFF side with bounded-degree finite-pole completion')
     t.add_argument('--masses')
     t.add_argument('--masses-file')

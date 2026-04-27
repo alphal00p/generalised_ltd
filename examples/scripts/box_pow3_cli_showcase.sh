@@ -8,6 +8,7 @@ DOT="$ROOT/examples/graphs/box_pow3.dot"
 OUT="${HYBRID3D_DEMO_DIR:-$ROOT/tmp/box_pow3_cli_showcase}"
 BATCH="${HYBRID3D_PROFILE_BATCH:-100}"
 NUMERATOR="${HYBRID3D_NUMERATOR:-dot(edges[0], ext[0]) + edges[3][0]}"
+UNIFORM_BOUNDS="${HYBRID3D_UNIFORM_BOUNDS:-0:1,1:1,2:0,3:4}"
 MASSES='{"m1":0.8,"m2":1.1,"m3":0.9,"m4":1.2}'
 
 mkdir -p "$OUT"
@@ -58,11 +59,55 @@ run python3 generalised_ltd.py build \
   --dot "$DOT" \
   --json-out "$OUT/box_pow3_cff_builtin.json"
 
+section "Uniform numerator sampling scale for a quartic repeated-channel numerator"
+run python3 generalised_ltd.py build \
+  --family cff \
+  --dot "$DOT" \
+  --energy-degree-bounds "$UNIFORM_BOUNDS" \
+  --numerator-expr auto \
+  --uniform-numerator-sampling-scale beyond-quadratic \
+  --pretty \
+  --no-color \
+  --json-out "$OUT/box_pow3_cff_uniform.json" \
+  | tee "$OUT/box_pow3_cff_uniform_pretty.txt"
+
+run python3 generalised_ltd.py build \
+  --family hybrid \
+  --dot "$DOT" \
+  --energy-degree-bounds "$UNIFORM_BOUNDS" \
+  --numerator-expr auto \
+  --uniform-numerator-sampling-scale beyond-quadratic \
+  --pretty \
+  --no-color \
+  --json-out "$OUT/box_pow3_hybrid_uniform.json" \
+  | tee "$OUT/box_pow3_hybrid_uniform_pretty.txt"
+
+run python3 generalised_ltd.py test \
+  --dot "$DOT" \
+  --masses "$MASSES" \
+  --energy-degree-bounds "$UNIFORM_BOUNDS" \
+  --numerator-expr auto \
+  --uniform-numerator-sampling-scale beyond-quadratic \
+  --uniform-scales 1.0,-2.0,2.75 \
+  --dps 50 \
+  --epsilons 0.01,0.001 \
+  --json-out "$OUT/box_pow3_uniform_five_way.json"
+
+run python3 generalised_ltd.py evaluate \
+  --orientation-json "$OUT/box_pow3_hybrid_uniform.json" \
+  --dot "$DOT" \
+  --masses "$MASSES" \
+  --numerator-expr auto \
+  --uniform-scale -2.0 \
+  --seed 1337 \
+  --dps 80
+
 run cp "$OUT/box_pow3_ltd_builtin.json" "$OUT/box_pow3_ltd_symbolica_real.json"
 run cp "$OUT/box_pow3_hybrid_builtin.json" "$OUT/box_pow3_hybrid_symbolica_real.json"
 run cp "$OUT/box_pow3_hybrid_builtin.json" "$OUT/box_pow3_hybrid_symbolica_complex.json"
 run cp "$OUT/box_pow3_cff_builtin.json" "$OUT/box_pow3_cff_symbolica_real.json"
 run cp "$OUT/box_pow3_cff_builtin.json" "$OUT/box_pow3_cff_symbolica_complex.json"
+run cp "$OUT/box_pow3_hybrid_uniform.json" "$OUT/box_pow3_hybrid_uniform_symbolica_real.json"
 
 section "Compile LTD Symbolica evaluator for stability reference"
 run python3 generalised_ltd.py compile \
@@ -110,6 +155,24 @@ run python3 generalised_ltd.py compile \
   --numerator-expr "$NUMERATOR" \
   --value-type complex \
   --output "$OUT/box_pow3_cff_complex.so"
+
+section "Compile and profile uniform-scale Symbolica evaluator"
+run python3 generalised_ltd.py compile \
+  --orientation-json "$OUT/box_pow3_hybrid_uniform_symbolica_real.json" \
+  --dot "$DOT" \
+  --numerator-expr auto \
+  --value-type real \
+  --output "$OUT/box_pow3_hybrid_uniform_real.so"
+
+run python3 generalised_ltd.py evaluate \
+  --orientation-json "$OUT/box_pow3_hybrid_uniform_symbolica_real.json" \
+  --dot "$DOT" \
+  --masses "$MASSES" \
+  --evaluator-backend symbolica \
+  --uniform-scale 1.0 \
+  --profiling "$BATCH" \
+  --seed 1337 \
+  | tee "$OUT/profile_uniform_symbolica_real.json"
 
 section "Single-value evaluation: built-in vs Symbolica real vs Symbolica complex"
 run python3 generalised_ltd.py evaluate \

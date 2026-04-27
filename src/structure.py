@@ -20,15 +20,32 @@ def numerator_from_expr(expr: str):
 
 
 def _linear_to_min(expr):
-    return {'i': [[a, b] for a, b in expr.internal_terms], 'x': [[a, b] for a, b in expr.external_terms], 'c': expr.const}
+    out = {'i': [[a, b] for a, b in expr.internal_terms], 'x': [[a, b] for a, b in expr.external_terms], 'c': expr.const}
+    if int(getattr(expr, 'uniform_scale_coeff', 0)):
+        out['m'] = int(expr.uniform_scale_coeff)
+    return out
 
 
-def _min_eval(d, E_vals, OSE_vals):
+def _as_mp(value):
+    if isinstance(value, complex):
+        return mp.mpc(value)
+    text = str(value).strip()
+    if text.endswith('j') or 'j' in text or 'J' in text:
+        return mp.mpc(complex(text.replace('J', 'j')))
+    return mp.mpf(text)
+
+
+def _min_eval(d, E_vals, OSE_vals, uniform_scale=None):
     total = mp.mpf(d.get('c', '0'))
     for edge_id, coeff in d.get('i', []):
         total += mp.mpf(coeff) * E_vals[int(edge_id)]
     for ext_id, coeff in d.get('x', []):
         total += mp.mpf(coeff) * OSE_vals[int(ext_id)]
+    m_coeff = int(d.get('m', 0) or 0)
+    if m_coeff:
+        if uniform_scale is None:
+            raise ValueError('JSON energy map depends on uniform_scale M; pass --uniform-scale at evaluation time')
+        total += mp.mpf(m_coeff) * _as_mp(uniform_scale)
     return total
 
 
@@ -64,7 +81,7 @@ def _compress_chains(chains: List[Tuple[int, ...]]):
 
 
 def _expr_key(expr: Dict[str, Any]):
-    return (tuple((int(a), int(b)) for a, b in expr.get('i', [])), tuple((int(a), int(b)) for a, b in expr.get('x', [])), str(expr.get('c', '0')))
+    return (tuple((int(a), int(b)) for a, b in expr.get('i', [])), tuple((int(a), int(b)) for a, b in expr.get('x', [])), int(expr.get('m', 0) or 0), str(expr.get('c', '0')))
 
 def _json_pref(value):
     try:
@@ -74,12 +91,12 @@ def _json_pref(value):
     return frac.numerator if frac.denominator == 1 else str(value)
 
 def _expr_is_zero(expr: Dict[str, Any]) -> bool:
-    return not expr.get('i') and not expr.get('x') and str(expr.get('c', '0')) in {'0', '0.0'}
+    return not expr.get('i') and not expr.get('x') and not int(expr.get('m', 0) or 0) and str(expr.get('c', '0')) in {'0', '0.0'}
 
 def _edge_map_symbol(edge_id: int, expr: Dict[str, Any]) -> str:
     if _expr_is_zero(expr):
         return '0'
-    if not expr.get('x') and str(expr.get('c', '0')) in {'0', '0.0'}:
+    if not expr.get('x') and not int(expr.get('m', 0) or 0) and str(expr.get('c', '0')) in {'0', '0.0'}:
         terms = [(int(a), int(b)) for a, b in expr.get('i', [])]
         if terms == [(int(edge_id), 1)]:
             return '+'
@@ -118,6 +135,31 @@ def _variant_origin_label(label: str, meta: Dict[str, Any]) -> str:
     return source or label_s
 
 
+def _surface_terms(expr) -> Dict[str, Any]:
+    return {
+        'ose': [[int(a), int(b)] for a, b in expr.internal_terms],
+        'external_shift': [[int(a), int(b)] for a, b in expr.external_terms],
+        'uniform_scale': int(getattr(expr, 'uniform_scale_coeff', 0)),
+        'constant': expr.const,
+    }
+
+
+def _surface_classification(surface) -> Tuple[str, str]:
+    label = str(getattr(surface, 'label', ''))
+    expr = surface.expr
+    helper_prefixes = (
+        'known-base:', 'pinch', 'qrem', 'qcontact', 'known-factor', 'contact-q',
+        'remainder-', 'terminal-unit', 'lower-cff', 'bounded-', 'helper-'
+    )
+    origin = 'helper' if label.startswith(helper_prefixes) else 'physical'
+    non_unit_ose = any(abs(int(coeff)) != 1 for _, coeff in expr.internal_terms)
+    helper_factor = label.startswith(('known-factor', 'contact-q', 'remainder-', 'terminal-unit'))
+    has_uniform = bool(int(getattr(expr, 'uniform_scale_coeff', 0)))
+    terminal = label.startswith('terminal-unit')
+    singularity = 'spurious' if (has_uniform or non_unit_ose or helper_factor or terminal) else 'physical'
+    return origin, singularity
+
+
 def minimal_structure_from_bundle(bundle, parsed, backend: str, family: str, validation: dict):
     denominator_surface_ids = set()
     numerator_surface_ids = set()
@@ -128,7 +170,11 @@ def minimal_structure_from_bundle(bundle, parsed, backend: str, family: str, val
         {
             'id': s.surface_id,
             'k': s.kind,
+            'label': s.label,
             'e': _linear_to_min(s.expr),
+            'terms': _surface_terms(s.expr),
+            'surface_origin': _surface_classification(s)[0],
+            'singularity': _surface_classification(s)[1],
             'numerator_only': int(s.surface_id) in numerator_surface_ids and int(s.surface_id) not in denominator_surface_ids,
         }
         for s in bundle.surface_cache
@@ -166,6 +212,7 @@ def minimal_structure_from_bundle(bundle, parsed, backend: str, family: str, val
         term_key = (
             _variant_origin_label(str(t.orientation_id), t.meta),
             tuple(int(x) for x in t.prefactor_half_edges),
+            int(getattr(t, 'prefactor_uniform_scale_power', 0)),
             tuple(int(x) for x in t.numerator_surface_chain),
             tuple(int(x) for x in t.surface_chain),
         )
@@ -180,11 +227,11 @@ def minimal_structure_from_bundle(bundle, parsed, backend: str, family: str, val
     orientations = []
     for idx, entry in enumerate(by_orient.values()):
         variant_chains: Dict[Tuple[str, Fraction, Tuple[int, ...], Tuple[int, ...]], Dict[str, Any]] = {}
-        for (origin, half_edges, num_surfaces, chain), item in entry.pop('terms').items():
+        for (origin, half_edges, uniform_scale_power, num_surfaces, chain), item in entry.pop('terms').items():
             pref = item['pref']
             if not pref:
                 continue
-            key = (origin, pref, half_edges, num_surfaces)
+            key = (origin, pref, half_edges, uniform_scale_power, num_surfaces)
             slot = variant_chains.setdefault(key, {
                 'chains': [],
                 'meta': dict(item['meta']),
@@ -195,7 +242,7 @@ def minimal_structure_from_bundle(bundle, parsed, backend: str, family: str, val
                 if lbl not in slot['orientation_labels']:
                     slot['orientation_labels'].append(lbl)
         variants = []
-        for (origin, pref, half_edges, num_surfaces), item in variant_chains.items():
+        for (origin, pref, half_edges, uniform_scale_power, num_surfaces), item in variant_chains.items():
             chains = item['chains']
             denom_id, tree = intern_tree(chains)
             variants.append({
@@ -203,6 +250,7 @@ def minimal_structure_from_bundle(bundle, parsed, backend: str, family: str, val
                 'origin': origin,
                 'pref': _json_pref(pref),
                 'half_edges': list(half_edges),
+                'uniform_scale_power': int(uniform_scale_power),
                 'num_surfaces': list(num_surfaces),
                 'loop_q0': entry['loop_q0'],
                 'edge_q0': entry['edge_q0'],
@@ -219,6 +267,7 @@ def minimal_structure_from_bundle(bundle, parsed, backend: str, family: str, val
             'edge_signs': entry['edge_signs'],
             'pref': first['pref'],
             'half_edges': first['half_edges'],
+            'uniform_scale_power': first.get('uniform_scale_power', 0),
             'num_surfaces': first['num_surfaces'],
             'loop_q0': entry['loop_q0'],
             'edge_q0': entry['edge_q0'],
@@ -275,7 +324,7 @@ def minimal_structure_from_bundle(bundle, parsed, backend: str, family: str, val
     }
 
 
-def compute_edge_four_vectors(signatures, masses, loop_spatial, ext4, edge_q0_exprs, parsed, ose_override=None):
+def compute_edge_four_vectors(signatures, masses, loop_spatial, ext4, edge_q0_exprs, parsed, ose_override=None, uniform_scale=None):
     E_vals = compute_internal_E_values(signatures, masses, loop_spatial, ext4)
     OSE_vals = {i: mpf(ext4[i][0]) for i in range(len(ext4))}
     OSE_vals.update(compute_external_half_edge_energies(parsed, ext4))
@@ -283,17 +332,17 @@ def compute_edge_four_vectors(signatures, masses, loop_spatial, ext4, edge_q0_ex
         OSE_vals.update({int(k): mpf(v) for k, v in ose_override.items()})
     out = []
     for expr, sig in zip(edge_q0_exprs, signatures):
-        q0 = _min_eval(expr, E_vals, OSE_vals)
+        q0 = _min_eval(expr, E_vals, OSE_vals, uniform_scale=uniform_scale)
         spatial = edge_spatial_momentum(sig, loop_spatial, ext4)
         out.append((q0, mpf(spatial[0]), mpf(spatial[1]), mpf(spatial[2])))
     return tuple(out)
 
 
-def _sum_tree(tree, node_idx, surfaces, E_vals, OSE_vals):
+def _sum_tree(tree, node_idx, surfaces, E_vals, OSE_vals, uniform_scale=None):
     node = tree['nodes'][node_idx]
     factor = mp.mpf(1)
     for sid in node['surfaces']:
-        val = _min_eval(surfaces[int(sid)]['e'], E_vals, OSE_vals)
+        val = _min_eval(surfaces[int(sid)]['e'], E_vals, OSE_vals, uniform_scale=uniform_scale)
         if val == 0:
             val = mp.mpf('1.0e-80')
         factor /= val
@@ -301,11 +350,39 @@ def _sum_tree(tree, node_idx, surfaces, E_vals, OSE_vals):
         return factor
     subtotal = mp.mpf(0)
     for c in node['children']:
-        subtotal += _sum_tree(tree, c, surfaces, E_vals, OSE_vals)
+        subtotal += _sum_tree(tree, c, surfaces, E_vals, OSE_vals, uniform_scale=uniform_scale)
     return factor * subtotal
 
 
-def evaluate_minimal_bundle(data, dot, ext4, loop3, numerator_fn, mass_map=None, ose_override: Optional[Dict[int, Any]] = None):
+def _data_uses_uniform_scale(data: Dict[str, Any]) -> bool:
+    if str(data.get('graph', {}).get('uniform_numerator_sampling_scale', 'none')) != 'none':
+        return True
+    for surface in data.get('surfaces', []):
+        if int(surface.get('e', {}).get('m', 0) or 0):
+            return True
+    for orient in data.get('orientations', []):
+        for var in orient.get('variants') or [orient]:
+            if int(var.get('uniform_scale_power', 0) or 0):
+                return True
+            for expr in list(var.get('loop_q0', [])) + list(var.get('edge_q0', [])):
+                if int(expr.get('m', 0) or 0):
+                    return True
+    return False
+
+
+def _validate_uniform_scale(data: Dict[str, Any], uniform_scale):
+    if uniform_scale is None:
+        if _data_uses_uniform_scale(data):
+            raise ValueError('This JSON uses uniform numerator sampling. Pass --uniform-scale VALUE.')
+        return None
+    val = _as_mp(uniform_scale)
+    if val == 0:
+        raise ValueError('uniform_scale M must be nonzero')
+    return val
+
+
+def evaluate_minimal_bundle(data, dot, ext4, loop3, numerator_fn, mass_map=None, ose_override: Optional[Dict[int, Any]] = None, uniform_scale=None):
+    uniform_scale_value = _validate_uniform_scale(data, uniform_scale)
     parsed = parse_dot_graph(dot)
     masses = resolve_edge_masses(parsed, mass_map)
     signatures = tuple(e.signature for e in parsed.internal_edges)
@@ -317,7 +394,7 @@ def evaluate_minimal_bundle(data, dot, ext4, loop3, numerator_fn, mass_map=None,
     ext4_mp = tuple(tuple(mpf(x) for x in p) for p in ext4)
 
     total = mp.mpf(0)
-    denominator_cache: Dict[Tuple[Any, Tuple[int, ...]], mp.mpf] = {}
+    denominator_cache: Dict[Tuple[Any, Tuple[int, ...], int], mp.mpf] = {}
     numerator_cache: Dict[Tuple[Any, Any], mp.mpf] = {}
     for orient in data['orientations']:
         variants = orient.get('variants')
@@ -333,31 +410,36 @@ def evaluate_minimal_bundle(data, dot, ext4, loop3, numerator_fn, mass_map=None,
         for var in variants:
             pref = mp.mpf(var['pref'])
             half_edges = tuple(int(e) for e in var['half_edges'])
+            uniform_scale_power = int(var.get('uniform_scale_power', 0) or 0)
             num_surface_ids = tuple(int(sid) for sid in var.get('num_surfaces', []))
-            denom_key = (var.get('denom_id', id(var['tree'])), half_edges)
+            denom_key = (var.get('denom_id', id(var['tree'])), half_edges, uniform_scale_power)
             denom = denominator_cache.get(denom_key)
             if denom is None:
                 denom = mp.mpf(1)
                 for e in half_edges:
                     denom /= (2 * E_vals[int(e)])
+                if uniform_scale_power:
+                    if uniform_scale_value is None:
+                        raise ValueError('This variant depends on uniform_scale M; pass --uniform-scale')
+                    denom /= uniform_scale_value ** uniform_scale_power
                 treesum = mp.mpf(0)
                 for r in var['tree']['roots']:
-                    treesum += _sum_tree(var['tree'], r, data['surfaces'], E_vals, OSE_vals)
+                    treesum += _sum_tree(var['tree'], r, data['surfaces'], E_vals, OSE_vals, uniform_scale=uniform_scale_value)
                 denom *= treesum
                 denominator_cache[denom_key] = denom
             num_surface_factor = mp.mpf(1)
             for sid in num_surface_ids:
-                num_surface_factor *= _min_eval(data['surfaces'][int(sid)]['e'], E_vals, OSE_vals)
+                num_surface_factor *= _min_eval(data['surfaces'][int(sid)]['e'], E_vals, OSE_vals, uniform_scale=uniform_scale_value)
             num_key = (
                 tuple(_expr_key(x) for x in var['loop_q0']),
                 tuple(_expr_key(x) for x in var['edge_q0']),
             )
             num = numerator_cache.get(num_key)
             if num is None:
-                loop_q0 = [_min_eval(x, E_vals, OSE_vals) for x in var['loop_q0']]
+                loop_q0 = [_min_eval(x, E_vals, OSE_vals, uniform_scale=uniform_scale_value) for x in var['loop_q0']]
                 loop_four = tuple((loop_q0[i], *(mpf(x) for x in loop3[i])) for i in range(len(loop3)))
-                edge_four = compute_edge_four_vectors(signatures, masses, loop3, ext4_mp, var['edge_q0'], parsed, ose_override=ose_override)
-                num = mp.mpf(numerator_fn(loop_four, ext4_mp, edge_four, edge_four))
+                edge_four = compute_edge_four_vectors(signatures, masses, loop3, ext4_mp, var['edge_q0'], parsed, ose_override=ose_override, uniform_scale=uniform_scale_value)
+                num = _as_mp(numerator_fn(loop_four, ext4_mp, edge_four, edge_four))
                 numerator_cache[num_key] = num
             total += pref * num_surface_factor * num * denom
     return total

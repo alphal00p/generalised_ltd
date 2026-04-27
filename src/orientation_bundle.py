@@ -112,20 +112,25 @@ class LinearEnergyExpr:
     internal_terms: Tuple[Tuple[int, int], ...]
     external_terms: Tuple[Tuple[int, int], ...]
     const: str = '0'
+    uniform_scale_coeff: int = 0
     @staticmethod
     def zero() -> 'LinearEnergyExpr': return LinearEnergyExpr(tuple(), tuple(), '0')
     @staticmethod
     def E(edge_id: int, coeff: int = 1) -> 'LinearEnergyExpr': return LinearEnergyExpr(((int(edge_id), int(coeff)),), tuple(), '0') if coeff else LinearEnergyExpr.zero()
     @staticmethod
     def X(ext_id: int, coeff: int = 1) -> 'LinearEnergyExpr': return LinearEnergyExpr(tuple(), ((int(ext_id), int(coeff)),), '0') if coeff else LinearEnergyExpr.zero()
+    @staticmethod
+    def M(coeff: int = 1) -> 'LinearEnergyExpr': return LinearEnergyExpr(tuple(), tuple(), '0', int(coeff)) if coeff else LinearEnergyExpr.zero()
     def _const_frac(self) -> Fraction: return Fraction(str(self.const))
     def canonical(self) -> 'LinearEnergyExpr':
         im: Dict[int, int] = {}; xm: Dict[int, int] = {}
         for i,c in self.internal_terms: im[int(i)] = im.get(int(i),0) + int(c)
         for i,c in self.external_terms: xm[int(i)] = xm.get(int(i),0) + int(c)
-        return LinearEnergyExpr(tuple(sorted((i,c) for i,c in im.items() if c)), tuple(sorted((i,c) for i,c in xm.items() if c)), _frac_to_str(self._const_frac()))
-    def __add__(self, other: 'LinearEnergyExpr') -> 'LinearEnergyExpr': return LinearEnergyExpr(self.internal_terms+other.internal_terms, self.external_terms+other.external_terms, _frac_to_str(self._const_frac()+other._const_frac())).canonical()
-    def __neg__(self) -> 'LinearEnergyExpr': return LinearEnergyExpr(tuple((i,-c) for i,c in self.internal_terms), tuple((i,-c) for i,c in self.external_terms), _frac_to_str(-self._const_frac())).canonical()
+        return LinearEnergyExpr(tuple(sorted((i,c) for i,c in im.items() if c)), tuple(sorted((i,c) for i,c in xm.items() if c)), _frac_to_str(self._const_frac()), int(self.uniform_scale_coeff)).canonical_no_recurse()
+    def canonical_no_recurse(self) -> 'LinearEnergyExpr':
+        return LinearEnergyExpr(self.internal_terms, self.external_terms, self.const, int(self.uniform_scale_coeff))
+    def __add__(self, other: 'LinearEnergyExpr') -> 'LinearEnergyExpr': return LinearEnergyExpr(self.internal_terms+other.internal_terms, self.external_terms+other.external_terms, _frac_to_str(self._const_frac()+other._const_frac()), int(self.uniform_scale_coeff)+int(other.uniform_scale_coeff)).canonical()
+    def __neg__(self) -> 'LinearEnergyExpr': return LinearEnergyExpr(tuple((i,-c) for i,c in self.internal_terms), tuple((i,-c) for i,c in self.external_terms), _frac_to_str(-self._const_frac()), -int(self.uniform_scale_coeff)).canonical()
     def __sub__(self, other: 'LinearEnergyExpr') -> 'LinearEnergyExpr': return self + (-other)
     def mul(self, n: Fraction|int) -> 'LinearEnergyExpr':
         f=Fraction(n); it=[]; xt=[]
@@ -135,11 +140,18 @@ class LinearEnergyExpr:
         for i,c in self.external_terms:
             v=Fraction(c)*f
             if v: xt.append((i, int(v) if v.denominator==1 else int(v)))
-        return LinearEnergyExpr(tuple(it), tuple(xt), _frac_to_str(self._const_frac()*f)).canonical()
-    def evaluate(self, E_vals: Dict[int, mp.mpf], OSE_vals: Dict[int, mp.mpf]) -> mp.mpf:
+        m = Fraction(self.uniform_scale_coeff) * f
+        if m.denominator != 1:
+            raise NotImplementedError('Uniform-scale coefficients must remain integral')
+        return LinearEnergyExpr(tuple(it), tuple(xt), _frac_to_str(self._const_frac()*f), int(m)).canonical()
+    def evaluate(self, E_vals: Dict[int, mp.mpf], OSE_vals: Dict[int, mp.mpf], uniform_scale=None) -> mp.mpf:
         total=mp.mpf(self.const)
         for edge_id, coeff in self.internal_terms: total += mp.mpf(coeff)*E_vals[int(edge_id)]
         for ext_id, coeff in self.external_terms: total += mp.mpf(coeff)*OSE_vals[int(ext_id)]
+        if int(self.uniform_scale_coeff):
+            if uniform_scale is None:
+                raise ValueError('This energy expression depends on the uniform numerator sampling scale M')
+            total += mp.mpf(self.uniform_scale_coeff)*uniform_scale
         return total
     def render(self) -> str:
         parts=[]
@@ -149,6 +161,7 @@ class LinearEnergyExpr:
             return (label if mag==1 else f'{mag}*{label}', c<0)
         for i,c in self.internal_terms: parts.append(term(f'OSE[{i}]',c))
         for i,c in self.external_terms: parts.append(term(f'E[{i}]',c))
+        if int(self.uniform_scale_coeff): parts.append(term('M', int(self.uniform_scale_coeff)))
         if not parts: return '0'
         out=('-' if parts[0][1] else '')+parts[0][0]
         for txt,neg in parts[1:]: out += (' - ' if neg else ' + ') + txt
@@ -160,6 +173,7 @@ class KnownLinearExpr:
     ose_terms: Tuple[Tuple[int, int], ...] = tuple()
     external_terms: Tuple[Tuple[int, int], ...] = tuple()
     const: str = '0'
+    uniform_scale_coeff: int = 0
 
     @staticmethod
     def zero() -> 'KnownLinearExpr':
@@ -167,15 +181,19 @@ class KnownLinearExpr:
 
     @staticmethod
     def var(edge_id: int, coeff: int = 1) -> 'KnownLinearExpr':
-        return KnownLinearExpr(((int(edge_id), int(coeff)),), tuple(), tuple(), '0').canonical() if coeff else KnownLinearExpr.zero()
+        return KnownLinearExpr(((int(edge_id), int(coeff)),), tuple(), tuple(), '0', 0).canonical() if coeff else KnownLinearExpr.zero()
 
     @staticmethod
     def ose(edge_id: int, coeff: int = 1) -> 'KnownLinearExpr':
-        return KnownLinearExpr(tuple(), ((int(edge_id), int(coeff)),), tuple(), '0').canonical() if coeff else KnownLinearExpr.zero()
+        return KnownLinearExpr(tuple(), ((int(edge_id), int(coeff)),), tuple(), '0', 0).canonical() if coeff else KnownLinearExpr.zero()
 
     @staticmethod
     def external(ext_id: int, coeff: int = 1) -> 'KnownLinearExpr':
-        return KnownLinearExpr(tuple(), tuple(), ((int(ext_id), int(coeff)),), '0').canonical() if coeff else KnownLinearExpr.zero()
+        return KnownLinearExpr(tuple(), tuple(), ((int(ext_id), int(coeff)),), '0', 0).canonical() if coeff else KnownLinearExpr.zero()
+
+    @staticmethod
+    def uniform_scale(coeff: int = 1) -> 'KnownLinearExpr':
+        return KnownLinearExpr(tuple(), tuple(), tuple(), '0', int(coeff)).canonical() if coeff else KnownLinearExpr.zero()
 
     def _const_frac(self) -> Fraction:
         return Fraction(str(self.const))
@@ -195,6 +213,7 @@ class KnownLinearExpr:
             tuple(sorted((i, c) for i, c in om.items() if c)),
             tuple(sorted((i, c) for i, c in xm.items() if c)),
             _frac_to_str(self._const_frac()),
+            int(self.uniform_scale_coeff),
         )
 
     def __add__(self, other: 'KnownLinearExpr') -> 'KnownLinearExpr':
@@ -203,6 +222,7 @@ class KnownLinearExpr:
             self.ose_terms + other.ose_terms,
             self.external_terms + other.external_terms,
             _frac_to_str(self._const_frac() + other._const_frac()),
+            int(self.uniform_scale_coeff) + int(other.uniform_scale_coeff),
         ).canonical()
 
     def __neg__(self) -> 'KnownLinearExpr':
@@ -211,6 +231,7 @@ class KnownLinearExpr:
             tuple((i, -c) for i, c in self.ose_terms),
             tuple((i, -c) for i, c in self.external_terms),
             _frac_to_str(-self._const_frac()),
+            -int(self.uniform_scale_coeff),
         ).canonical()
 
     def __sub__(self, other: 'KnownLinearExpr') -> 'KnownLinearExpr':
@@ -227,17 +248,21 @@ class KnownLinearExpr:
                         raise NotImplementedError('Known numerator factors require integral linear coefficients')
                     out.append((int(i), int(v)))
             return tuple(out)
+        m = Fraction(self.uniform_scale_coeff) * f
+        if m.denominator != 1:
+            raise NotImplementedError('Known numerator factors require integral uniform-scale coefficients')
         return KnownLinearExpr(
             scale_terms(self.var_terms),
             scale_terms(self.ose_terms),
             scale_terms(self.external_terms),
             _frac_to_str(self._const_frac() * f),
+            int(m),
         ).canonical()
 
     def replace_var_with_ose(self, edge_id: int, sample: int, ose_edge_id: Optional[int] = None) -> 'KnownLinearExpr':
         edge_id = int(edge_id)
         ose_edge_id = edge_id if ose_edge_id is None else int(ose_edge_id)
-        out = KnownLinearExpr(tuple(), self.ose_terms, self.external_terms, self.const)
+        out = KnownLinearExpr(tuple(), self.ose_terms, self.external_terms, self.const, self.uniform_scale_coeff)
         for i, c in self.var_terms:
             if int(i) == edge_id:
                 out = out + KnownLinearExpr.ose(ose_edge_id, int(c) * int(sample))
@@ -247,13 +272,13 @@ class KnownLinearExpr:
 
     def is_zero(self) -> bool:
         item = self.canonical()
-        return not item.var_terms and not item.ose_terms and not item.external_terms and item.const in {'0', '0.0'}
+        return not item.var_terms and not item.ose_terms and not item.external_terms and not int(item.uniform_scale_coeff) and item.const in {'0', '0.0'}
 
     def variable_edges(self) -> Tuple[int, ...]:
         return tuple(int(i) for i, _ in self.var_terms)
 
     def to_surface_expr(self, edge_exprs: Sequence[LinearEnergyExpr]) -> LinearEnergyExpr:
-        out = LinearEnergyExpr(tuple(), self.external_terms, self.const).canonical()
+        out = LinearEnergyExpr(tuple(), self.external_terms, self.const, int(self.uniform_scale_coeff)).canonical()
         for edge_id, coeff in self.ose_terms:
             out = out + LinearEnergyExpr.E(int(edge_id), int(coeff))
         for edge_id, coeff in self.var_terms:
@@ -265,7 +290,7 @@ class SurfaceDef:
     surface_id: int; kind: str; expr: LinearEnergyExpr; label: str
 @dataclass(frozen=True)
 class OrientationTerm:
-    orientation_id: str; family: str; branch_id: int; edge_orientations: Tuple[int,...]; prefactor_sign: Any; prefactor_half_edges: Tuple[int,...]; surface_chain: Tuple[int,...]; loop_energy_exprs: Tuple[LinearEnergyExpr,...]; edge_energy_exprs: Tuple[LinearEnergyExpr,...]; meta: Dict[str,Any]; numerator_surface_chain: Tuple[int,...] = tuple()
+    orientation_id: str; family: str; branch_id: int; edge_orientations: Tuple[int,...]; prefactor_sign: Any; prefactor_half_edges: Tuple[int,...]; surface_chain: Tuple[int,...]; loop_energy_exprs: Tuple[LinearEnergyExpr,...]; edge_energy_exprs: Tuple[LinearEnergyExpr,...]; meta: Dict[str,Any]; numerator_surface_chain: Tuple[int,...] = tuple(); prefactor_uniform_scale_power: int = 0
 @dataclass(frozen=True)
 class ExpressionBundle:
     family: str; loop_names: Tuple[str,...]; ext_names: Tuple[str,...]; signatures: Tuple[Signature,...]; surface_cache: Tuple[SurfaceDef,...]; terms: Tuple[OrientationTerm,...]
@@ -292,6 +317,7 @@ class _NumeratorSample:
     edge_orientations: Tuple[int, ...]
     label: str
     meta: Dict[str, Any]
+    uniform_scale_power: int = 0
 
 def classify_surface_kind(expr: LinearEnergyExpr) -> str:
     coeffs=[int(c) for _,c in expr.internal_terms if int(c)!=0]
@@ -825,6 +851,7 @@ def _bounded_numerator_derivative_samples(
     cut_signs: Sequence[int],
     edge_derivs: Sequence[Sequence[Fraction]],
     n_external: int,
+    uniform_numerator_sampling_scale: str = 'none',
 ) -> Tuple[_NumeratorSample, ...]:
     beta = tuple(int(x) for x in beta)
     basis_orig = tuple(channels[int(i)].rep_edge for i in basis_logical)
@@ -848,6 +875,10 @@ def _bounded_numerator_derivative_samples(
         ),)
 
     degree_by_basis = _basis_variable_degree_bounds(bounds, edge_derivs, len(basis_logical))
+    channel_degree_by_basis = tuple(
+        sum(int(bounds[int(member)]) for member in channels[int(logical_idx)].members)
+        for logical_idx in basis_logical
+    )
     per_axis = []
     for bpos, order in enumerate(beta):
         if not order:
@@ -857,24 +888,32 @@ def _bounded_numerator_derivative_samples(
             return tuple()
         nodes = _derivative_nodes(degree)
         weights = _finite_difference_weights(nodes, order, degree)
-        per_axis.append((bpos, tuple((int(node), weight) for node, weight in zip(nodes, weights) if weight)))
+        per_axis.append((bpos, _uniform_sampling_active(uniform_numerator_sampling_scale, channel_degree_by_basis[bpos]), tuple((int(node), weight) for node, weight in zip(nodes, weights) if weight)))
 
     out: List[_NumeratorSample] = []
-    for choices in itertools.product(*(items for _, items in per_axis)):
+    for choices in itertools.product(*(items for _, _, items in per_axis)):
         coeff = Fraction(1)
         offsets: Dict[int, int] = {}
-        for (bpos, _), (node, weight) in zip(per_axis, choices):
+        axis_uniform: Dict[int, bool] = {}
+        for (bpos, use_uniform, _), (node, weight) in zip(per_axis, choices):
             coeff *= Fraction(weight)
             offsets[int(bpos)] = int(node)
+            axis_uniform[int(bpos)] = bool(use_uniform)
         if not coeff:
             continue
         targets = [LinearEnergyExpr.zero() for _ in signatures]
         labels = []
         for bpos, (edge_id, sigma) in enumerate(zip(basis_orig, cut_signs)):
-            sample_coeff = int(sigma) + int(offsets.get(bpos, 0))
-            targets[int(edge_id)] = LinearEnergyExpr.E(int(edge_id), sample_coeff)
+            offset = int(offsets.get(bpos, 0))
+            if axis_uniform.get(bpos, False):
+                targets[int(edge_id)] = LinearEnergyExpr.E(int(edge_id), int(sigma)) + LinearEnergyExpr.M(offset)
+                sample_label = f'{int(sigma):+d}{offset:+d}M'
+            else:
+                sample_coeff = int(sigma) + offset
+                targets[int(edge_id)] = LinearEnergyExpr.E(int(edge_id), sample_coeff)
+                sample_label = f'{sample_coeff:+d}'
             if bpos in offsets:
-                labels.append(f'b{bpos}{sample_coeff:+d}')
+                labels.append(f'b{bpos}{sample_label}')
         loop_exprs = solve_loop_energy_from_target_edge_exprs(signatures, basis_orig, targets, n_external)
         edge_exprs = edge_q0_from_loop_exprs(signatures, loop_exprs, n_external)
         edge_orient = [0] * len(signatures)
@@ -884,10 +923,16 @@ def _bounded_numerator_derivative_samples(
             elif expr == LinearEnergyExpr.E(edge_id, -1):
                 edge_orient[edge_id] = -1
         extra_half_edges: List[int] = []
+        uniform_scale_power = 0
+        nonuniform_order_sum = 0
         for bpos, order in enumerate(beta):
+            if axis_uniform.get(bpos, False):
+                uniform_scale_power += int(order)
+                continue
             rep_edge = int(channels[int(basis_logical[bpos])].rep_edge)
             extra_half_edges.extend(rep_edge for _ in range(int(order)))
-        coeff *= Fraction(2) ** sum(beta)
+            nonuniform_order_sum += int(order)
+        coeff *= Fraction(2) ** nonuniform_order_sum
         out.append(_NumeratorSample(
             coeff=coeff,
             extra_half_edges=tuple(extra_half_edges),
@@ -900,7 +945,11 @@ def _bounded_numerator_derivative_samples(
                 'finite_difference_beta': list(beta),
                 'finite_difference_offsets': dict(offsets),
                 'finite_difference_degree_bounds_by_basis': list(degree_by_basis),
+                'finite_difference_channel_degree_bounds_by_basis': list(channel_degree_by_basis),
+                'uniform_numerator_sampling_scale': str(uniform_numerator_sampling_scale),
+                'uniform_scale_axes': {str(k): v for k, v in axis_uniform.items() if v},
             },
+            uniform_scale_power=uniform_scale_power,
         ))
     return tuple(out)
 
@@ -1159,6 +1208,7 @@ def _remap_linear_expr(expr: LinearEnergyExpr, edge_map: Dict[int, int]) -> Line
         tuple((int(edge_map[int(edge_id)]), int(coeff)) for edge_id, coeff in expr.internal_terms),
         expr.external_terms,
         expr.const,
+        int(expr.uniform_scale_coeff),
     ).canonical()
 
 def _poly_add(a: Sequence[Fraction], b: Sequence[Fraction]) -> Tuple[Fraction, ...]:
@@ -1272,14 +1322,52 @@ def _channel_normal_form_terms(poly: Sequence[Fraction], channel_power: int):
         if coeff
     )
 
+def _channel_uniform_normal_form_terms(poly: Sequence[Fraction], channel_power: int):
+    """Decompose interpolation monomials with u=q/M.
+
+    For r=2a+p, q^r/M^r is rewritten as
+    q^p M^{-r} (D+E^2)^a.  The returned tuple is
+    (remaining_denominator_power, parity, cancelled_denominator_power,
+    inverse_uniform_scale_power, positive_ose_power, coefficient).
+    """
+    channel_power = int(channel_power)
+    combined: Dict[Tuple[int, int, int, int, int], Fraction] = {}
+    for power, raw_coeff in enumerate(poly):
+        coeff = Fraction(raw_coeff)
+        if not coeff:
+            continue
+        quotient_power, parity = divmod(int(power), 2)
+        for d_power in range(quotient_power + 1):
+            term_coeff = coeff * Fraction(math.comb(quotient_power, d_power))
+            remaining = max(0, channel_power - d_power)
+            cancelled = max(0, d_power - channel_power)
+            inverse_scale_power = int(power)
+            positive_ose_power = 2 * (quotient_power - d_power)
+            key = (remaining, parity, cancelled, inverse_scale_power, positive_ose_power)
+            combined[key] = combined.get(key, Fraction(0)) + term_coeff
+    return tuple(
+        (remaining, parity, cancelled, scale_power, ose_power, coeff)
+        for (remaining, parity, cancelled, scale_power, ose_power), coeff in sorted(combined.items())
+        if coeff
+    )
+
+def _uniform_sampling_active(mode: str, degree: int) -> bool:
+    mode = str(mode or 'none')
+    degree = int(degree)
+    if mode == 'all':
+        return degree > 1
+    if mode == 'beyond-quadratic':
+        return degree > 2
+    return False
+
 def _linear_expr_is_zero(expr: LinearEnergyExpr) -> bool:
-    return not expr.internal_terms and not expr.external_terms and expr.const in {'0', '0.0'}
+    return not expr.internal_terms and not expr.external_terms and not int(expr.uniform_scale_coeff) and expr.const in {'0', '0.0'}
 
 def _linear_expr_is_one(expr: LinearEnergyExpr) -> bool:
-    return not expr.internal_terms and not expr.external_terms and expr.const == '1'
+    return not expr.internal_terms and not expr.external_terms and not int(expr.uniform_scale_coeff) and expr.const == '1'
 
 def _known_from_linear_as_vars(expr: LinearEnergyExpr) -> KnownLinearExpr:
-    return KnownLinearExpr(expr.internal_terms, tuple(), expr.external_terms, expr.const).canonical()
+    return KnownLinearExpr(expr.internal_terms, tuple(), expr.external_terms, expr.const, int(expr.uniform_scale_coeff)).canonical()
 
 def _known_signature_expr(parsed: ParsedGraph, signature: Signature) -> KnownLinearExpr:
     signatures = tuple(edge.signature for edge in parsed.internal_edges)
@@ -1319,7 +1407,7 @@ def _remap_known_factor_to_sub(
     subparsed: ParsedGraph,
     factor: KnownLinearExpr,
 ) -> KnownLinearExpr:
-    out = KnownLinearExpr(tuple(), factor.ose_terms, factor.external_terms, factor.const)
+    out = KnownLinearExpr(tuple(), factor.ose_terms, factor.external_terms, factor.const, factor.uniform_scale_coeff)
     for edge_id, coeff in factor.var_terms:
         expr = _known_signature_expr(subparsed, parsed.internal_edges[int(edge_id)].signature)
         out = out + expr.mul(int(coeff))
@@ -2135,6 +2223,7 @@ def _append_known_base_terms(
     replacements: Dict[int, LinearEnergyExpr],
     known_factors: Tuple[KnownLinearExpr, ...],
     extra_half_edges: Tuple[int, ...],
+    extra_uniform_scale_power: int,
     prefactor: Fraction,
     report: dict,
     lower_sector_base: bool,
@@ -2193,6 +2282,7 @@ def _append_known_base_terms(
             tuple(full_edge_exprs),
             meta,
             tuple(num_surfaces),
+            int(extra_uniform_scale_power) + int(getattr(term, 'prefactor_uniform_scale_power', 0)),
         ))
         branch += 1
     return branch
@@ -2219,6 +2309,7 @@ def _known_recursive_terms(
     replacements: Dict[int, LinearEnergyExpr],
     known_factors: Tuple[KnownLinearExpr, ...],
     extra_half_edges: Tuple[int, ...],
+    extra_uniform_scale_power: int,
     prefactor: Fraction,
     report: dict,
     lower_sector_base: bool,
@@ -2249,6 +2340,7 @@ def _known_recursive_terms(
             replacements,
             known_factors,
             extra_half_edges,
+            extra_uniform_scale_power,
             prefactor,
             report,
             lower_sector_base,
@@ -2280,6 +2372,7 @@ def _known_recursive_terms(
             next_replacements,
             sampled_factors,
             tuple(extra_half_edges) + (orig_edge,),
+            extra_uniform_scale_power,
             prefactor,
             report,
             lower_sector_base,
@@ -2316,6 +2409,7 @@ def _known_recursive_terms(
                 next_replacements,
                 remapped_factors,
                 tuple(extra_half_edges) + tuple(orig_edge for _ in range(int(power) + 2)),
+                extra_uniform_scale_power,
                 Fraction(prefactor) * Fraction(coeff) * (2 ** (int(power) + 2)),
                 report,
                 True,
@@ -2337,6 +2431,7 @@ def build_known_factor_bounded_cff_bundle(parsed: ParsedGraph, bounds: Tuple[int
         {},
         tuple(),
         tuple(),
+        0,
         Fraction(1),
         report,
         False,
@@ -2360,6 +2455,7 @@ def build_known_factor_bounded_cff_bundle(parsed: ParsedGraph, bounds: Tuple[int
             term.edge_energy_exprs,
             meta,
             term.numerator_surface_chain,
+            term.prefactor_uniform_scale_power,
         ))
     return ExpressionBundle('bounded_cff', tuple(), tuple(), tuple(edge.signature for edge in parsed.internal_edges), sb.build(), tuple(enriched))
 
@@ -2390,18 +2486,21 @@ def _active_repeated_channel(
     local_to_orig: Tuple[int, ...],
     bounds: Tuple[int, ...],
     replacements: Dict[int, LinearEnergyExpr],
+    uniform_sampling_mode: str = 'none',
 ) -> Optional[Tuple[_LogicalChannel, int]]:
     for channel in _logical_channels(parsed):
         if int(channel.power) <= 1:
             continue
         degree = _channel_blackbox_degree(channel, local_to_orig, bounds, replacements)
-        if degree > 2:
+        if degree > 2 or _uniform_sampling_active(uniform_sampling_mode, degree):
             return channel, degree
     return None
 
-def _channel_replacement_expr(edge_id: int, sample: int, rel_sign: int) -> LinearEnergyExpr:
+def _channel_replacement_expr(edge_id: int, sample: int, rel_sign: int, use_uniform_scale: bool = False) -> LinearEnergyExpr:
     sample = int(sample) * int(rel_sign)
-    return LinearEnergyExpr.zero() if sample == 0 else LinearEnergyExpr.E(int(edge_id), sample)
+    if sample == 0:
+        return LinearEnergyExpr.zero()
+    return LinearEnergyExpr.M(sample) if use_uniform_scale else LinearEnergyExpr.E(int(edge_id), sample)
 
 def _channel_y_factor(parsed: ParsedGraph, signature: Signature) -> KnownLinearExpr:
     return _known_signature_expr(parsed, signature)
@@ -2414,17 +2513,19 @@ def _channel_recursive_terms(
     replacements: Dict[int, LinearEnergyExpr],
     known_factors: Tuple[KnownLinearExpr, ...],
     extra_half_edges: Tuple[int, ...],
+    extra_uniform_scale_power: int,
     prefactor: Fraction,
     report: dict,
     lower_sector_base: bool,
     sb: SurfaceCacheBuilder,
     out_terms: List[OrientationTerm],
     branch: int,
+    uniform_sampling_mode: str = 'none',
     depth: int = 0,
 ) -> int:
     if depth > 8:
         raise RecursionError('bounded CFF channel recursion did not terminate')
-    active = _active_repeated_channel(parsed, local_to_orig, bounds, replacements)
+    active = _active_repeated_channel(parsed, local_to_orig, bounds, replacements, uniform_sampling_mode)
     if active is None:
         return _known_recursive_terms(
             parsed,
@@ -2434,6 +2535,7 @@ def _channel_recursive_terms(
             replacements,
             known_factors,
             extra_half_edges,
+            extra_uniform_scale_power,
             prefactor,
             report,
             lower_sector_base,
@@ -2447,9 +2549,18 @@ def _channel_recursive_terms(
     rep_orig = int(local_to_orig[rep_local])
     rep_signature = parsed.internal_edges[rep_local].signature
     nodes = _interpolation_nodes(degree)
+    use_uniform_scale = _uniform_sampling_active(uniform_sampling_mode, degree)
     for node_idx, sample in enumerate(nodes):
         basis_poly = _lagrange_basis(nodes, node_idx)
-        for remaining_power, parity, cancelled_power, inv_power, coeff in _channel_normal_form_terms(basis_poly, channel.power):
+        if use_uniform_scale:
+            channel_terms = _channel_uniform_normal_form_terms(basis_poly, channel.power)
+        else:
+            channel_terms = tuple(
+                (remaining_power, parity, cancelled_power, inv_power, 0, coeff)
+                for remaining_power, parity, cancelled_power, inv_power, coeff
+                in _channel_normal_form_terms(basis_poly, channel.power)
+            )
+        for remaining_power, parity, cancelled_power, inv_power, positive_ose_power, coeff in channel_terms:
             if not coeff:
                 continue
             keep = set(int(local_id) for local_id in channel.members[:int(remaining_power)])
@@ -2462,7 +2573,7 @@ def _channel_recursive_terms(
             for local_id in channel.members:
                 orig_id = int(local_to_orig[int(local_id)])
                 rel = _relative_signature_sign(rep_signature, parsed.internal_edges[int(local_id)].signature)
-                sub_replacements[orig_id] = _channel_replacement_expr(orig_id, int(sample), rel)
+                sub_replacements[orig_id] = _channel_replacement_expr(orig_id, int(sample), rel, use_uniform_scale)
 
             sub_known: List[KnownLinearExpr] = [
                 _remap_known_factor_to_sub(parsed, subparsed, factor)
@@ -2470,6 +2581,8 @@ def _channel_recursive_terms(
             ]
             if int(parity):
                 sub_known.append(_channel_y_factor(subparsed, rep_signature))
+            if int(positive_ose_power):
+                sub_known.extend(KnownLinearExpr.ose(rep_orig, 1) for _ in range(int(positive_ose_power)))
             if int(cancelled_power):
                 y_expr = _channel_y_factor(subparsed, rep_signature)
                 plus = (y_expr + KnownLinearExpr.ose(rep_orig, 1)).canonical()
@@ -2477,8 +2590,9 @@ def _channel_recursive_terms(
                 for _ in range(int(cancelled_power)):
                     sub_known.extend([minus, plus])
 
-            channel_half_edges = tuple(int(rep_orig) for _ in range(int(inv_power)))
-            channel_prefactor = Fraction(prefactor) * Fraction(coeff) * (2 ** int(inv_power))
+            channel_half_edges = tuple() if use_uniform_scale else tuple(int(rep_orig) for _ in range(int(inv_power)))
+            channel_uniform_scale_power = int(inv_power) if use_uniform_scale else 0
+            channel_prefactor = Fraction(prefactor) * Fraction(coeff) * (1 if use_uniform_scale else (2 ** int(inv_power)))
             if not channel_prefactor:
                 continue
             before = len(out_terms)
@@ -2490,12 +2604,14 @@ def _channel_recursive_terms(
                 sub_replacements,
                 tuple(f.canonical() for f in sub_known),
                 tuple(extra_half_edges) + channel_half_edges,
+                int(extra_uniform_scale_power) + channel_uniform_scale_power,
                 channel_prefactor,
                 report,
                 True if delete else lower_sector_base,
                 sb,
                 out_terms,
                 branch,
+                uniform_sampling_mode,
                 depth + 1,
             )
             for term_idx in range(before, len(out_terms)):
@@ -2512,6 +2628,9 @@ def _channel_recursive_terms(
                     'parity': int(parity),
                     'cancelled_power': int(cancelled_power),
                     'inverse_ose_power': int(inv_power),
+                    'inverse_uniform_scale_power': int(channel_uniform_scale_power),
+                    'positive_ose_power': int(positive_ose_power),
+                    'uniform_scale_sampling': bool(use_uniform_scale),
                     'coefficient': _frac_to_str(Fraction(coeff)),
                 })
                 meta.update({
@@ -2523,6 +2642,7 @@ def _channel_recursive_terms(
                     'finite_pole_completion_e_surfaces_only': True,
                     'channel_reductions': history,
                     'merge_by_numerator_map': True,
+                    'uniform_numerator_sampling_scale': str(uniform_sampling_mode),
                 })
                 out_terms[term_idx] = OrientationTerm(
                     term.orientation_id,
@@ -2536,10 +2656,11 @@ def _channel_recursive_terms(
                     term.edge_energy_exprs,
                     meta,
                     term.numerator_surface_chain,
+                    term.prefactor_uniform_scale_power,
                 )
     return branch
 
-def build_channel_bounded_cff_bundle(parsed: ParsedGraph, bounds: Tuple[int, ...], report: dict) -> ExpressionBundle:
+def build_channel_bounded_cff_bundle(parsed: ParsedGraph, bounds: Tuple[int, ...], report: dict, uniform_numerator_sampling_scale: str = 'none') -> ExpressionBundle:
     sb = SurfaceCacheBuilder()
     terms: List[OrientationTerm] = []
     branch = _channel_recursive_terms(
@@ -2550,12 +2671,14 @@ def build_channel_bounded_cff_bundle(parsed: ParsedGraph, bounds: Tuple[int, ...
         {},
         tuple(),
         tuple(),
+        0,
         Fraction(1),
         report,
         False,
         sb,
         terms,
         0,
+        uniform_numerator_sampling_scale,
     )
     enriched = []
     for idx, term in enumerate(terms):
@@ -2573,10 +2696,11 @@ def build_channel_bounded_cff_bundle(parsed: ParsedGraph, bounds: Tuple[int, ...
             term.edge_energy_exprs,
             meta,
             term.numerator_surface_chain,
+            term.prefactor_uniform_scale_power,
         ))
     return ExpressionBundle('bounded_cff', tuple(), tuple(), tuple(edge.signature for edge in parsed.internal_edges), sb.build(), tuple(enriched))
 
-def build_bounded_degree_cff_bundle(parsed, energy_degree_bounds):
+def build_bounded_degree_cff_bundle(parsed, energy_degree_bounds, uniform_numerator_sampling_scale: str = 'none'):
     signatures = tuple(e.signature for e in parsed.internal_edges)
     bounds = normalize_energy_degree_bounds(energy_degree_bounds, len(signatures))
     report = assert_energy_uv_convergent(signatures, bounds)
@@ -2601,16 +2725,23 @@ def build_bounded_degree_cff_bundle(parsed, energy_degree_bounds):
                 term.edge_energy_exprs,
                 meta,
                 term.numerator_surface_chain,
+                term.prefactor_uniform_scale_power,
             ))
         return ExpressionBundle(bundle.family, bundle.loop_names, bundle.ext_names, bundle.signatures, bundle.surface_cache, tuple(terms))
 
     high_edges = [idx for idx, bound in enumerate(bounds) if int(bound) > 2]
     signature_counts = _signature_multiplicities_ignoring_mass(parsed)
     has_duplicate_signature = any(count > 1 for count in signature_counts.values())
+    uniform_mode = str(uniform_numerator_sampling_scale or 'none')
+    repeated_channel_needs_uniform = (
+        uniform_mode == 'all'
+        and has_duplicate_signature
+        and any(int(bound) > 1 for bound in bounds)
+    )
 
-    if high_edges:
+    if high_edges or repeated_channel_needs_uniform:
         try:
-            return build_channel_bounded_cff_bundle(parsed, bounds, report)
+            return build_channel_bounded_cff_bundle(parsed, bounds, report, uniform_numerator_sampling_scale=uniform_mode)
         except NotImplementedError as exc:
             raise NotImplementedError(
                 'Pure CFF bounded-degree lift could not build the lower contact completion '
@@ -2644,7 +2775,7 @@ def build_pure_ltd_bundle(signatures,n_external_symbols=None):
         terms.append(OrientationTerm(orientation_id_from_signs(edge_orient),'pure_ltd',bc,tuple(edge_orient),pref,tuple(basis),tuple(chain),loop_exprs,edge_exprs,{'basis':list(basis),'cut_signs':cut_signs,'source':'canonical_ltd_residue'})); bc+=1
     return ExpressionBundle('pure_ltd',tuple(),tuple(),tuple(signatures),sb.build(),tuple(terms))
 
-def _build_confluent_hybrid_bundle(parsed: ParsedGraph, energy_degree_bounds=None):
+def _build_confluent_hybrid_bundle(parsed: ParsedGraph, energy_degree_bounds=None, uniform_numerator_sampling_scale: str = 'none'):
     signatures=tuple(e.signature for e in parsed.internal_edges)
     bounds = normalize_energy_degree_bounds(energy_degree_bounds, len(signatures)) if energy_degree_bounds is not None else None
     n_internal=len(signatures)
@@ -2733,6 +2864,7 @@ def _build_confluent_hybrid_bundle(parsed: ParsedGraph, energy_degree_bounds=Non
                     cut_signs,
                     edge_derivs,
                     n_external,
+                    uniform_numerator_sampling_scale,
                 )
             if not num_samples:
                 continue
@@ -2765,6 +2897,7 @@ def _build_confluent_hybrid_bundle(parsed: ParsedGraph, energy_degree_bounds=Non
                     }
                     if bounds is not None:
                         meta['energy_degree_bounds'] = list(bounds)
+                        meta['uniform_numerator_sampling_scale'] = str(uniform_numerator_sampling_scale)
                     meta.update(num_sample.meta)
                     terms.append(OrientationTerm(
                         label,
@@ -2777,16 +2910,18 @@ def _build_confluent_hybrid_bundle(parsed: ParsedGraph, energy_degree_bounds=Non
                         tuple(num_sample.loop_exprs),
                         tuple(num_sample.edge_exprs),
                         meta,
+                        tuple(),
+                        int(num_sample.uniform_scale_power),
                     ))
                     branch += 1
     return ExpressionBundle('hybrid',tuple(),tuple(),signatures,sb.build(),tuple(terms))
 
-def build_hybrid_bundle_raw(parsed, energy_degree_bounds=None):
+def build_hybrid_bundle_raw(parsed, energy_degree_bounds=None, uniform_numerator_sampling_scale: str = 'none'):
     rep_groups=repeated_groups(parsed); signatures=tuple(e.signature for e in parsed.internal_edges)
     if not rep_groups:
         ltd=build_pure_ltd_bundle(signatures,len(parsed.ext_names))
         return ExpressionBundle('hybrid',ltd.loop_names,ltd.ext_names,ltd.signatures,ltd.surface_cache,ltd.terms)
-    return _build_confluent_hybrid_bundle(parsed, energy_degree_bounds=energy_degree_bounds)
+    return _build_confluent_hybrid_bundle(parsed, energy_degree_bounds=energy_degree_bounds, uniform_numerator_sampling_scale=uniform_numerator_sampling_scale)
 
 def edge_spatial_momentum(signature, loop_spatial_momenta, external_momenta):
     loop_coeffs, ext_coeffs=signature; x=y=z=mp.mpf(0)

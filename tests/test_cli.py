@@ -1804,3 +1804,131 @@ def test_cli_evaluate_auto_numerator_uses_json_energy_bounds(tmp_path):
         capture_output=True,
     )
     assert mp.mpf(auto_proc.stdout.strip()) == mp.mpf(explicit_proc.stdout.strip())
+
+def _uses_uniform_scale(data):
+    return any(
+        expr.get('m')
+        for orient in data['orientations']
+        for variant in orient.get('variants', [])
+        for expr in list(variant.get('loop_q0', [])) + list(variant.get('edge_q0', []))
+    ) or any(
+        int(variant.get('uniform_scale_power', 0) or 0)
+        for orient in data['orientations']
+        for variant in orient.get('variants', [])
+    )
+
+def _denominator_surface_ids(data):
+    out = set()
+    for orient in data['orientations']:
+        for variant in orient.get('variants', []):
+            for node in variant['tree']['nodes']:
+                out.update(int(surface_id) for surface_id in node.get('surfaces', []))
+    return out
+
+def test_uniform_sampling_build_metadata_tags_and_cff_denominators_are_not_spurious():
+    d = dot('box_pow3.dot')
+    cff = build_structure(
+        d,
+        'cff',
+        energy_degree_bounds={3: 4},
+        uniform_numerator_sampling_scale='beyond-quadratic',
+    )
+    assert cff['graph']['uniform_numerator_sampling_scale'] == 'beyond-quadratic'
+    assert cff['graph']['uniform_scale_symbol'] == 'M'
+    assert _uses_uniform_scale(cff)
+    denom_ids = _denominator_surface_ids(cff)
+    assert not any(
+        surface.get('singularity') == 'spurious'
+        for surface in cff['surfaces']
+        if int(surface['id']) in denom_ids
+    )
+    rendered = __import__('src.api').api.pretty_structure(cff, dot=d, use_color=False)
+    assert 'uniform_numerator_sampling_scale=beyond-quadratic' in rendered
+    assert '(e_h_sp)' in rendered
+
+def test_uniform_sampling_modes_and_scale_values_match_default():
+    d = dot('box_pow3.dot')
+    ext4, loop3, masses = __import__('src.api').api._random_default_inputs(d, 1337)
+    bounds = {0: 1, 1: 1, 2: 1, 3: 2}
+    numerator = _auto_edge_external_numerator(d, bounds)
+    default_cff = build_structure(d, 'cff', energy_degree_bounds=bounds)
+    default_hybrid = build_structure(d, 'hybrid', energy_degree_bounds=bounds)
+    beyond_hybrid = build_structure(
+        d,
+        'hybrid',
+        energy_degree_bounds=bounds,
+        uniform_numerator_sampling_scale='beyond-quadratic',
+    )
+    all_hybrid = build_structure(
+        d,
+        'hybrid',
+        energy_degree_bounds=bounds,
+        uniform_numerator_sampling_scale='all',
+    )
+    assert not _uses_uniform_scale(beyond_hybrid)
+    assert _uses_uniform_scale(all_hybrid)
+    default_cff_val = evaluate_structure(default_cff, d, ext4, loop3, numerator, 70, masses)
+    default_hybrid_val = evaluate_structure(default_hybrid, d, ext4, loop3, numerator, 70, masses)
+    all_cff = build_structure(d, 'cff', energy_degree_bounds=bounds, uniform_numerator_sampling_scale='all')
+    for scale in ('1.0', '-2.0', '2.75'):
+        cff_val = evaluate_structure(all_cff, d, ext4, loop3, numerator, 70, masses, uniform_scale=scale)
+        hybrid_val = evaluate_structure(all_hybrid, d, ext4, loop3, numerator, 70, masses, uniform_scale=scale)
+        assert abs(cff_val - default_cff_val) < mp.mpf('1e-60')
+        assert abs(hybrid_val - default_hybrid_val) < mp.mpf('1e-60')
+
+def test_cli_test_uniform_sampling_reports_requested_scales():
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'generalised_ltd.py'),
+            'test',
+            '--dot',
+            str(ROOT / 'examples' / 'graphs' / 'box_pow3.dot'),
+            '--energy-degree-bounds',
+            '0:1,1:1,2:0,3:4',
+            '--numerator-expr',
+            'auto',
+            '--uniform-numerator-sampling-scale',
+            'beyond-quadratic',
+            '--uniform-scales',
+            '1.0,-2.0',
+            '--dps',
+            '60',
+            '--epsilons',
+            '0.01,0.001',
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    report = json.loads(proc.stdout)
+    assert report['uniform_sampling']['mode'] == 'beyond-quadratic'
+    assert [item['uniform_scale'] for item in report['uniform_sampling']['scales']] == ['1.0', '-2.0']
+    for item in report['uniform_sampling']['scales']:
+        assert mp.mpf(item['abs_uniform_cff_minus_default_cff']) < mp.mpf('1e-55')
+        assert mp.mpf(item['abs_uniform_hybrid_minus_default_hybrid']) < mp.mpf('1e-55')
+
+def test_uniform_scale_runtime_validation_and_symbolica_real_complex_policy():
+    d = dot('box_pow3.dot')
+    data = build_structure(
+        d,
+        'hybrid',
+        energy_degree_bounds={3: 4},
+        uniform_numerator_sampling_scale='beyond-quadratic',
+    )
+    ext4, loop3, masses = __import__('src.api').api._random_default_inputs(d, 1337)
+    numerator = _auto_edge_external_numerator(d, {3: 4})
+    with pytest.raises(ValueError, match='uniform'):
+        evaluate_structure(data, d, ext4, loop3, numerator, 50, masses)
+    with pytest.raises(ValueError, match='nonzero'):
+        evaluate_structure(data, d, ext4, loop3, numerator, 50, masses, uniform_scale='0')
+
+    from src import symbolica_eval as SYMEVAL
+    metadata = {
+        'value_type': 'real',
+        'input_layout': [{'kind': 'uniform_scale', 'name': 'uniform_scale'}],
+    }
+    with pytest.raises(ValueError, match='Complex uniform_scale'):
+        SYMEVAL.prepare_symbolica_inputs(metadata, d, ext4, loop3, masses, uniform_scale='1.3+0.4j')
+    metadata['value_type'] = 'complex'
+    assert SYMEVAL.prepare_symbolica_inputs(metadata, d, ext4, loop3, masses, uniform_scale='1.3+0.4j') == [complex('1.3+0.4j')]

@@ -235,7 +235,9 @@ Pretty labels use:
 - `x`: a non-trivial linear map, shown in detail with `--show-details`.
 
 Surface classes are printed as `e` or `h`; numerator-only surfaces are printed
-as `(e)` or `(h)`.
+as `(e)` or `(h)`. Helper-origin surfaces add `_h`, and algorithmic helper
+factors that are not original causal surfaces add `_sp`, for example `e_h` or
+`(e_h_sp)`.
 
 ## Energy-Degree Bounds
 
@@ -308,6 +310,63 @@ Current exact bounded-degree support:
 
 Bounded pure CFF is constructed directly with E-surface denominator terms
 rather than through a `CFF + (LTD - CFF)` correction.
+
+### Uniform Repeated-Channel Sampling Scale
+
+Repeated-channel interpolation normally uses the dimensionless variable
+`q_C^0/OSE[C]`.  This is the default:
+
+```bash
+--uniform-numerator-sampling-scale none
+```
+
+For high repeated-channel numerator degrees, the interpolation can instead use
+a runtime scale `M`, so inverse interpolation powers are `1/M^r` rather than
+artificial `1/OSE[C]^r` factors:
+
+```bash
+python3 generalised_ltd.py build --family cff \
+  --dot examples/graphs/box_pow3.dot \
+  --energy-degree-bounds 3:4 \
+  --uniform-numerator-sampling-scale beyond-quadratic \
+  --pretty --show-details
+```
+
+Available policies are:
+
+- `none`: default, use the existing `OSE[C]` normalization.
+- `beyond-quadratic`: use `M` only for repeated-channel degree greater than 2.
+- `all`: use `M` for every repeated-channel interpolation degree greater than 1.
+
+Uniform JSONs record `graph.uniform_numerator_sampling_scale` and
+`graph.uniform_scale_symbol="M"`. Energy maps can contain an integer `"m"`
+coefficient, e.g. `{"i":[[3,1]],"x":[[0,-1]],"m":2,"c":"0"}` means
+`OSE[3] - E[0] + 2*M`; variants can also carry `uniform_scale_power`, meaning
+an extra factor `M^-power`.
+
+Evaluate such JSONs with a non-zero scale:
+
+```bash
+python3 generalised_ltd.py evaluate \
+  --orientation-json tmp/box_pow3_uniform_cff.json \
+  --dot examples/graphs/box_pow3.dot \
+  --numerator-expr auto \
+  --uniform-scale -2.0
+```
+
+`test` can compare the default representation and uniform variants in one run:
+
+```bash
+python3 generalised_ltd.py test --dot examples/graphs/box_pow3.dot \
+  --energy-degree-bounds 0:1,1:1,2:0,3:4 \
+  --numerator-expr auto \
+  --uniform-numerator-sampling-scale beyond-quadratic \
+  --uniform-scales 1.0,-2.0,2.75
+```
+
+`M=0` is rejected. Real evaluators accept positive or negative real values.
+Complex Symbolica evaluators accept complex `M`; real Symbolica evaluators
+reject complex `M` cleanly.
 
 The CFF builder does not treat repeated signatures as a special obstruction:
 they are repeated denominator factors in the CFF expression.  For high-power
@@ -394,5 +453,5 @@ it explicitly with:
 HYBRID3D_RUN_SLOW=1 PYTHONPATH=. pytest -q tests/test_cli.py::test_ultimate_five_loop_bases_three_way_and_aligned_momenta
 ```
 
-See `docs/hybrid_3d.pdf` for the derivation, JSON mapping, and bounded-degree
+See `docs/generalised_ltd.pdf` for the derivation, JSON mapping, and bounded-degree
 support structure.

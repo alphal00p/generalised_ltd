@@ -23,10 +23,11 @@ class VectorRef:
     index: int
 
 
-def _expr_key(expr: Mapping[str, Any]) -> Tuple[Tuple[Tuple[int, int], ...], Tuple[Tuple[int, int], ...], str]:
+def _expr_key(expr: Mapping[str, Any]) -> Tuple[Tuple[Tuple[int, int], ...], Tuple[Tuple[int, int], ...], int, str]:
     return (
         tuple((int(a), int(b)) for a, b in expr.get("i", [])),
         tuple((int(a), int(b)) for a, b in expr.get("x", [])),
+        int(expr.get("m", 0) or 0),
         str(expr.get("c", "0")),
     )
 
@@ -97,12 +98,17 @@ def _zero():
     return _num(0)
 
 
-def _linear_expr(expr: Mapping[str, Any]):
+def _linear_expr(expr: Mapping[str, Any], uniform_scale_expr=None):
     out = _num(expr.get("c", "0"))
     for edge_id, coeff in expr.get("i", []):
         out += _num(coeff) * _tagged("iE", int(edge_id))
     for ext_id, coeff in expr.get("x", []):
         out += _num(coeff) * _tagged("extE", int(ext_id))
+    m_coeff = int(expr.get("m", 0) or 0)
+    if m_coeff:
+        if uniform_scale_expr is None:
+            raise ValueError("Expression depends on uniform_scale M, but the Symbolica input layout has no uniform_scale parameter.")
+        out += _num(m_coeff) * uniform_scale_expr
     return out
 
 
@@ -226,7 +232,7 @@ class NumeratorTranslator(ast.NodeVisitor):
         raise ValueError(f"Unsupported numerator syntax: {node.__class__.__name__}.")
 
 
-def _input_layout(parsed: Any) -> List[Dict[str, Any]]:
+def _input_layout(parsed: Any, include_uniform_scale: bool = False) -> List[Dict[str, Any]]:
     layout: List[Dict[str, Any]] = []
     for ext_id, name in enumerate(parsed.ext_names):
         for component, comp_name in enumerate(("e", "x", "y", "z")):
@@ -236,6 +242,8 @@ def _input_layout(parsed: Any) -> List[Dict[str, Any]]:
             layout.append({"kind": "loop3", "index": loop_id, "component": spatial_component, "name": f"loop_{name}_{comp_name}"})
     for edge in parsed.internal_edges:
         layout.append({"kind": "mass", "edge": edge.edge_id, "mass_key": edge.mass_key, "name": f"mass_edge_{edge.edge_id}"})
+    if include_uniform_scale:
+        layout.append({"kind": "uniform_scale", "name": "uniform_scale"})
     return layout
 
 
@@ -254,6 +262,8 @@ def _param_lookup(layout: Sequence[Mapping[str, Any]], params: Sequence[Any]) ->
             lookup[(kind, int(entry["index"]), int(entry["component"]))] = param
         elif kind == "mass":
             lookup[(kind, int(entry["edge"]))] = param
+        elif kind == "uniform_scale":
+            lookup[(kind,)] = param
     return lookup
 
 
@@ -261,6 +271,22 @@ def _surface_call(surface: Mapping[str, Any]):
     kind = str(surface.get("k", "e"))
     name = "etaE" if kind == "e" else "etaH"
     return _tagged(name, int(surface["id"]))
+
+
+def _data_uses_uniform_scale(data: Mapping[str, Any]) -> bool:
+    if str(data.get("graph", {}).get("uniform_numerator_sampling_scale", "none")) != "none":
+        return True
+    for surface in data.get("surfaces", []):
+        if int(surface.get("e", {}).get("m", 0) or 0):
+            return True
+    for orient in data.get("orientations", []):
+        for variant in orient.get("variants") or [orient]:
+            if int(variant.get("uniform_scale_power", 0) or 0):
+                return True
+            for expr in list(variant.get("loop_q0", [])) + list(variant.get("edge_q0", [])):
+                if int(expr.get("m", 0) or 0):
+                    return True
+    return False
 
 
 def _tree_expr(tree: Mapping[str, Any], node_idx: int, surfaces: Mapping[int, Mapping[str, Any]]):
@@ -294,9 +320,11 @@ def _map_key(loop_q0: Sequence[Mapping[str, Any]], edge_q0: Sequence[Mapping[str
 def build_symbolica_expression(data: Mapping[str, Any], dot: Any, numerator_expr: str):
     E, S, _Expression, _Evaluator, _CC, _CR = _require_symbolica()
     parsed = parse_dot_graph(dot)
-    layout = _input_layout(parsed)
+    include_uniform_scale = _data_uses_uniform_scale(data)
+    layout = _input_layout(parsed, include_uniform_scale=include_uniform_scale)
     params = _params_from_layout(layout)
     param = _param_lookup(layout, params)
+    uniform_scale_expr = param.get(("uniform_scale",))
     surfaces = {int(surface["id"]): surface for surface in data.get("surfaces", [])}
     signatures = tuple(edge.signature for edge in parsed.internal_edges)
     edge_count = len(parsed.internal_edges)
@@ -332,7 +360,7 @@ def build_symbolica_expression(data: Mapping[str, Any], dot: Any, numerator_expr
 
     for surface in surfaces.values():
         call = _surface_call(surface)
-        functions[(call, f"{str(surface.get('k', 'e'))}_{int(surface['id'])}", tuple())] = _linear_expr(surface["e"])
+        functions[(call, f"{str(surface.get('k', 'e'))}_{int(surface['id'])}", tuple())] = _linear_expr(surface["e"], uniform_scale_expr)
 
     unique_maps: Dict[Tuple[Any, Any], int] = {}
     map_defs: List[Tuple[Sequence[Mapping[str, Any]], Sequence[Mapping[str, Any]]]] = []
@@ -346,11 +374,11 @@ def build_symbolica_expression(data: Mapping[str, Any], dot: Any, numerator_expr
     numerator_by_map: Dict[int, Any] = {}
     for map_id, (loop_q0, edge_q0) in enumerate(map_defs):
         for loop_id in range(loop_count):
-            functions[(_tagged("loopQ", map_id, loop_id, 0), f"loopQ_{map_id}_{loop_id}_0", tuple())] = _linear_expr(loop_q0[loop_id])
+            functions[(_tagged("loopQ", map_id, loop_id, 0), f"loopQ_{map_id}_{loop_id}_0", tuple())] = _linear_expr(loop_q0[loop_id], uniform_scale_expr)
             for spatial_component, mu in enumerate((1, 2, 3)):
                 functions[(_tagged("loopQ", map_id, loop_id, mu), f"loopQ_{map_id}_{loop_id}_{mu}", tuple())] = param[("loop3", loop_id, spatial_component)]
         for edge_id in range(edge_count):
-            functions[(_tagged("edgeQ", map_id, edge_id, 0), f"edgeQ_{map_id}_{edge_id}_0", tuple())] = _linear_expr(edge_q0[edge_id])
+            functions[(_tagged("edgeQ", map_id, edge_id, 0), f"edgeQ_{map_id}_{edge_id}_0", tuple())] = _linear_expr(edge_q0[edge_id], uniform_scale_expr)
             functions[(_tagged("edgeQ", map_id, edge_id, 1), f"edgeQ_{map_id}_{edge_id}_1", tuple())] = _tagged("qx", edge_id)
             functions[(_tagged("edgeQ", map_id, edge_id, 2), f"edgeQ_{map_id}_{edge_id}_2", tuple())] = _tagged("qy", edge_id)
             functions[(_tagged("edgeQ", map_id, edge_id, 3), f"edgeQ_{map_id}_{edge_id}_3", tuple())] = _tagged("qz", edge_id)
@@ -365,6 +393,11 @@ def build_symbolica_expression(data: Mapping[str, Any], dot: Any, numerator_expr
             term = _num(variant["pref"])
             for edge_id in variant.get("half_edges", []):
                 term /= _num(2) * _tagged("iE", int(edge_id))
+            uniform_power = int(variant.get("uniform_scale_power", 0) or 0)
+            if uniform_power:
+                if uniform_scale_expr is None:
+                    raise ValueError("Variant uses uniform_scale_power but no uniform_scale input was allocated.")
+                term /= uniform_scale_expr ** uniform_power
             for sid in variant.get("num_surfaces", []):
                 term *= _surface_call(surfaces[int(sid)])
             term *= _variant_tree_sum(variant, surfaces)
@@ -470,7 +503,11 @@ def compile_symbolica_evaluator(
         direct_translation=True,
     )
     if value_type == "complex":
-        evaluator.set_real_params(list(range(len(built["params"]))), sqrt_real=True)
+        real_param_indices = [
+            idx for idx, entry in enumerate(built["layout"])
+            if entry.get("kind") != "uniform_scale"
+        ]
+        evaluator.set_real_params(real_param_indices, sqrt_real=True)
     eager_path.write_bytes(evaluator.save())
     evaluator.compile(
         function_name,
@@ -522,7 +559,20 @@ def compile_symbolica_evaluator(
     }
 
 
-def prepare_symbolica_inputs(metadata: Mapping[str, Any], dot: Any, ext4: Sequence[Sequence[Any]], loop3: Sequence[Sequence[Any]], mass_map: Optional[Mapping[str, Any]]):
+def _parse_runtime_uniform_scale(value: Any):
+    if value is None:
+        raise ValueError("This Symbolica evaluator expects a uniform_scale input. Pass --uniform-scale VALUE.")
+    if isinstance(value, complex):
+        parsed = complex(value)
+    else:
+        text = str(value).strip().replace("J", "j")
+        parsed = complex(text) if "j" in text else float(text)
+    if parsed == 0:
+        raise ValueError("uniform_scale M must be nonzero.")
+    return parsed
+
+
+def prepare_symbolica_inputs(metadata: Mapping[str, Any], dot: Any, ext4: Sequence[Sequence[Any]], loop3: Sequence[Sequence[Any]], mass_map: Optional[Mapping[str, Any]], uniform_scale: Any = None):
     parsed = parse_dot_graph(dot)
     masses = resolve_edge_masses(parsed, dict(mass_map or {}))
     values: List[float] = []
@@ -534,6 +584,14 @@ def prepare_symbolica_inputs(metadata: Mapping[str, Any], dot: Any, ext4: Sequen
             values.append(float(loop3[int(entry["index"])][int(entry["component"])]))
         elif kind == "mass":
             values.append(float(masses[int(entry["edge"])]))
+        elif kind == "uniform_scale":
+            scale = _parse_runtime_uniform_scale(uniform_scale)
+            if isinstance(scale, complex):
+                if metadata.get("value_type") != "complex":
+                    raise ValueError("Complex uniform_scale requires a complex-valued Symbolica evaluator.")
+                values.append(scale)
+            else:
+                values.append(float(scale))
         else:
             raise ValueError(f"Unsupported Symbolica input layout kind {kind!r}.")
     return values
@@ -550,6 +608,7 @@ def prepare_symbolica_decimal_inputs(
     loop3: Sequence[Sequence[Any]],
     mass_map: Optional[Mapping[str, Any]],
     input_precision: int = 16,
+    uniform_scale: Any = None,
 ):
     parsed = parse_dot_graph(dot)
     masses = resolve_edge_masses(parsed, dict(mass_map or {}))
@@ -562,6 +621,10 @@ def prepare_symbolica_decimal_inputs(
             raw = loop3[int(entry["index"])][int(entry["component"])]
         elif kind == "mass":
             raw = masses[int(entry["edge"])]
+        elif kind == "uniform_scale":
+            raw = _parse_runtime_uniform_scale(uniform_scale)
+            if isinstance(raw, complex):
+                raise ValueError("Precision-tracking stability currently requires real uniform_scale values.")
         else:
             raise ValueError(f"Unsupported Symbolica input layout kind {kind!r}.")
         values.append(_decimal_from_input_float(raw, input_precision))
@@ -679,6 +742,7 @@ def evaluate_symbolica(
     batch_size: int = 1,
     profile: bool = False,
     backend: str = "symbolica_compiled",
+    uniform_scale: Any = None,
 ) -> Tuple[Any, Optional[Dict[str, Any]]]:
     metadata = symbolica_evaluator_metadata(data, backend)
     if metadata.get("structure_fingerprint") != structure_fingerprint(data):
@@ -695,7 +759,7 @@ def evaluate_symbolica(
         evaluator = load_eager_evaluator(pathlib.Path(json_path), metadata)
     else:
         raise ValueError(f"Unsupported Symbolica evaluator backend {backend!r}.")
-    row = prepare_symbolica_inputs(metadata, dot, ext4, loop3, mass_map)
+    row = prepare_symbolica_inputs(metadata, dot, ext4, loop3, mass_map, uniform_scale=uniform_scale)
     batch_size = int(batch_size)
     if batch_size < 1:
         raise ValueError("batch_size must be positive.")
@@ -734,6 +798,7 @@ def evaluate_symbolica_stability(
     mass_map: Optional[Mapping[str, Any]],
     input_precision: int = 16,
     work_precision: int = 80,
+    uniform_scale: Any = None,
 ) -> Dict[str, Any]:
     metadata = symbolica_evaluator_metadata(data, "symbolica_eager")
     if metadata.get("structure_fingerprint") != structure_fingerprint(data):
@@ -746,7 +811,7 @@ def evaluate_symbolica_stability(
         raise ValueError("work_precision must be at least input_precision.")
 
     evaluator = load_eager_evaluator(pathlib.Path(json_path), metadata)
-    row = prepare_symbolica_decimal_inputs(metadata, dot, ext4, loop3, mass_map, input_precision)
+    row = prepare_symbolica_decimal_inputs(metadata, dot, ext4, loop3, mass_map, input_precision, uniform_scale=uniform_scale)
     if metadata["value_type"] == "complex":
         result = evaluator.evaluate_complex_with_prec([(x, Decimal(0)) for x in row], int(work_precision))[0]
     else:
