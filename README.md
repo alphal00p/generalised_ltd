@@ -1,12 +1,12 @@
-# hybrid3d DOT prototype
+# hybrid3d DOT toolkit
 
 `hybrid3d.py` builds, prints, exports, and evaluates JSON representations for
 LTD, pure CFF, and the current hybrid LTD/CFF construction for repeated
 propagator channels.
 
 Raised propagators are encoded as repeated internal DOT edges with the same
-momentum signature and mass key.  The DOT `pow` attribute is intentionally
-rejected; use explicit repeated edges instead.
+momentum signature and mass key.  Use explicit repeated edges rather than the
+DOT `pow` attribute.
 
 ## CLI
 
@@ -253,8 +253,35 @@ contribute, the build fails.
 
 For `test` and `compare`, `--energy-degree-bounds` is the common bounded-degree
 configuration used for the CFF expression, the hybrid expression, and the
-split-mass LTD reference.  The older `--cff-energy-degree-bounds` option is
-kept only for legacy CFF-only diagnostics.
+split-mass LTD reference.  `--cff-energy-degree-bounds` is kept only for
+CFF-only diagnostics.
+
+Subcommands that evaluate a numerator (`evaluate`, `compile`, `compare`,
+`test`, and `test-cff-ltd`) accept `--numerator-expr auto`.  `build` accepts
+the same option as metadata and records the resolved expression in
+`graph.numerator_expr` without changing the numerator-independent orientation
+structure.  With
+`--energy-degree-bounds`, this expands to a product of edge-external dot
+products that saturates the requested EMR energy degree on every bounded edge.
+Unspecified edges receive degree zero and contribute no factor.  For example,
+on `box_pow3.dot`,
+
+```bash
+python3 hybrid3d.py test --dot examples/graphs/box_pow3.dot \
+  --energy-degree-bounds 3:3,4:4 --numerator-expr auto
+```
+
+uses
+
+```text
+dot(edges[3], ext[0]) * dot(edges[3], ext[1]) * dot(edges[3], ext[2]) *
+dot(edges[4], ext[1]) * dot(edges[4], ext[2]) * dot(edges[4], ext[0]) *
+dot(edges[4], ext[1])
+```
+
+as the actual numerator expression reported in the JSON diagnostic.  For
+`evaluate` and `compile`, `auto` reads the normalized bounds from
+`graph.energy_degree_bounds` in the orientation JSON.
 
 Current exact bounded-degree support:
 
@@ -273,20 +300,71 @@ Current exact bounded-degree support:
   causal minors, so denominator surfaces remain `E`-only; numerator-side cached
   surfaces may still be `E` or `H`.
 - `cff`: cubic, mixed cubic/quadratic, and quartic-or-higher caps are supported
-  through recursive lower-contact completion, including on repeated-signature
-  graphs.  Terminal tadpoles are encoded as unit denominator-tree nodes, so pure
+  through a channel normal form for repeated signatures and a recursive
+  lower-contact completion for ordinary high-power edges.  This includes
+  repeated-signature box, sunrise, kite, and iterated-bubble cases covered by
+  tests.  Terminal tadpoles are encoded as unit denominator-tree nodes, so pure
   CFF denominators remain `E`-surface-only.
 
-Unsupported bounded CFF cases raise `NotImplementedError`; the old
-`CFF + (LTD - CFF)` contact fallback has been removed.
+Bounded pure CFF is constructed directly with E-surface denominator terms
+rather than through a `CFF + (LTD - CFF)` correction.
 
 The CFF builder does not treat repeated signatures as a special obstruction:
-they are just repeated denominator factors in the CFF expression.  For
-high-power bounds it recursively reduces lower contact sectors, decomposes
-multiloop lower denominators into loop-energy matroid components, and serializes
-terminal tadpoles as unit denominator-tree nodes.  If a lower sector cannot be
-reconstructed with this E-only grammar, the builder raises `NotImplementedError`
-instead of silently falling back to an LTD contact correction.
+they are repeated denominator factors in the CFF expression.  For high-power
+bounds, the builder first reduces a repeated channel as a whole, so a channel
+such as the repeated `k2` sector in `sunrise_pow4.dot` with
+`--energy-degree-bounds 2:5` keeps an E-surface-only CFF denominator instead of
+falling into a lower-sector LTD correction.  For non-repeated high-power
+contacts it decomposes multiloop lower denominators into loop-energy matroid
+components and serializes terminal tadpoles as unit denominator-tree nodes.
+
+### Reading bounded repeated-channel JSON
+
+For a repeated channel `C` with representative edge `r`, multiplicity `nu`, and
+total requested channel degree `d_C`, bounded pure CFF builds a Lagrange
+interpolation in `q_C^0/OSE[r]`, rewrites every monomial in powers of
+`D_C=(q_C^0)^2-OSE[r]^2`, and serializes each resulting term as a normal
+orientation variant:
+
+- `edge_q0` is the unique black-box numerator map for the orientation.
+- `variants[*].meta.channel_reductions` records the derivation:
+  `members`, `representative`, `power`, `degree_bound`, `sample`,
+  `remaining_power`, `parity`, `cancelled_power`, `inverse_ose_power`, and the
+  rational `coefficient`.
+- `half_edges` contains the ordinary CFF half-edge factors plus
+  `inverse_ose_power` copies of the representative channel edge.
+- `num_surfaces` contains the cached numerator-only surface for the remaining
+  factor `q_C^0` when `parity=1`; denominator surfaces remain `E`-only.
+
+Representative CLI checks:
+
+```bash
+python3 hybrid3d.py build --family cff \
+  --dot examples/graphs/box_pow3.dot \
+  --energy-degree-bounds 3:4 --pretty --show-details
+
+python3 hybrid3d.py build --family cff \
+  --dot examples/graphs/sunrise_pow4.dot \
+  --energy-degree-bounds 2:5 --pretty --show-details
+
+python3 hybrid3d.py test \
+  --dot examples/graphs/sunrise_pow4.dot \
+  --energy-degree-bounds 2:5 --numerator-expr auto
+```
+
+For `box_pow3.dot --energy-degree-bounds 3:4`, the repeated channel is
+`[3,4,5]`, has power `3`, and uses interpolation nodes
+`1,-1,0,2,-2`.  The first printed numerator map has five variants; for
+sample `1` their channel metadata keeps denominator powers `1,2,2,3,3`,
+with inverse OSE powers `4,2,3,0,1`.
+
+For `sunrise_pow4.dot --energy-degree-bounds 2:5`, the repeated channel is
+`[2,3,4,5]`, has power `4`, and uses nodes `1,-1,0,2,-2,3`.  The first
+printed numerator map has six variants; for sample `1` their channel metadata
+keeps denominator powers `2,2,3,3,4,4`, with inverse OSE powers
+`4,5,2,3,0,1`.  This is the JSON form of the identity
+`(q_C^0)^5/D_C^4 = OSE_C^4 q_C^0/D_C^4 + 2 OSE_C^2 q_C^0/D_C^3 + q_C^0/D_C^2`,
+but implemented for a black-box numerator through interpolation samples.
 
 ## Tests
 
@@ -309,12 +387,12 @@ The default suite includes:
 - a non-repeated four-external five-loop graph,
 - a four-loop repeated-channel stress topology.
 
-The old five-loop ultimate basis alignment test is still present but slow.  Run
+The five-loop ultimate basis alignment test is still present but slow.  Run
 it explicitly with:
 
 ```bash
 HYBRID3D_RUN_SLOW=1 PYTHONPATH=. pytest -q tests/test_cli.py::test_ultimate_five_loop_bases_three_way_and_aligned_momenta
 ```
 
-See `docs/hybrid_3d.pdf` for the derivation, JSON mapping, and current bounded
-degree limitations.
+See `docs/hybrid_3d.pdf` for the derivation, JSON mapping, and bounded-degree
+support structure.

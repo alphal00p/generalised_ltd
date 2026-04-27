@@ -158,6 +158,7 @@ def compare_three_modes(dot, ext4, loop3, numerator_expr: str, dps: int = 80, ep
         'pairwise_distinct': (not any(exact_equalities.values())) if has_repeated else None,
         'energy_degree_bounds': merged_cff.get('graph', {}).get('energy_degree_bounds'),
         'split_ltd': seq,
+        'numerator': numerator_expr,
     }
 
 def run_cff_ltd_test(dot, ext4=None, loop3=None, numerator_expr: str = '1', dps: int = 80, mass_map: Optional[Dict[str, Any]] = None, seed: int = 1337, energy_degree_bounds=None, cff_data: Optional[dict] = None, ltd_data: Optional[dict] = None):

@@ -18,7 +18,7 @@ from src.orientation_bundle import (
 )
 from src.structure import minimal_structure_from_bundle, evaluate_minimal_bundle
 from src.structure import numerator_from_expr
-from hybrid3d import _profile_warnings
+from hybrid3d import _profile_warnings, auto_numerator_expr_for_bounds
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BOX_MASSES = {"m1":0.8,"m2":1.1,"m3":0.9,"m4":1.2}
@@ -142,6 +142,9 @@ def _all_edge_external_numerator(n_edges, n_external=4):
 
 def _edge_energy_monomial(bounds):
     return ' * '.join(f'edges[{i}][0]**{power}' for i, power in enumerate(bounds) if power) or '1'
+
+def _auto_edge_external_numerator(dot_graph, bounds):
+    return auto_numerator_expr_for_bounds(dot_graph, bounds)
 
 def _edge_map_key(orient):
     return tuple(json.dumps(expr, sort_keys=True) for expr in orient['edge_q0'])
@@ -1493,18 +1496,190 @@ def test_cli_test_accepts_common_energy_degree_bounds_for_repeated_topology():
     split_diffs = [mp.mpf(item['abs_to_hybrid']) for item in report['split_ltd']]
     assert split_diffs[-1] < split_diffs[0] * mp.mpf('0.02')
 
+def test_auto_numerator_expr_saturates_sparse_energy_bounds():
+    d = dot('box_pow3.dot')
+    numerator = _auto_edge_external_numerator(d, {0: 1, 1: 1, 2: 0, 3: 4})
+    assert numerator == (
+        'dot(edges[0], ext[0]) * dot(edges[1], ext[1]) * '
+        'dot(edges[3], ext[0]) * dot(edges[3], ext[1]) * '
+        'dot(edges[3], ext[2]) * dot(edges[3], ext[0])'
+    )
+
+def test_cli_build_auto_numerator_records_metadata():
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'build',
+            '--dot',
+            str(ROOT / 'examples' / 'graphs' / 'box_pow3.dot'),
+            '--family',
+            'cff',
+            '--energy-degree-bounds',
+            '3:3,4:4',
+            '--numerator-expr',
+            'auto',
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    data = json.loads(proc.stdout)
+    assert data['graph']['numerator_expr'] == _auto_edge_external_numerator(dot('box_pow3.dot'), {3: 3, 4: 4})
+
+def test_cli_test_auto_numerator_with_repeated_cubic_quartic_bounds():
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'test',
+            '--dot',
+            str(ROOT / 'examples' / 'graphs' / 'box_pow3.dot'),
+            '--energy-degree-bounds',
+            '3:3,4:4',
+            '--numerator-expr',
+            'auto',
+            '--dps',
+            '70',
+            '--epsilons',
+            '0.01,0.001',
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    report = json.loads(proc.stdout)
+    expected = _auto_edge_external_numerator(dot('box_pow3.dot'), {3: 3, 4: 4})
+    assert report['numerator'] == expected
+    assert report['energy_degree_bounds'] == [0, 0, 0, 3, 4, 0]
+    assert mp.mpf(report['abs_cff_minus_hybrid']) < mp.mpf('1e-55')
+    split_diffs = [mp.mpf(item['abs_to_hybrid']) for item in report['split_ltd']]
+    assert split_diffs[-1] < split_diffs[0] * mp.mpf('0.02')
+
+def test_cli_test_auto_numerator_with_affine_caps_uses_bounded_hybrid_samples():
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'test',
+            '--dot',
+            str(ROOT / 'examples' / 'graphs' / 'box_pow3.dot'),
+            '--energy-degree-bounds',
+            '0:1,1:1,2:1,3:1',
+            '--numerator-expr',
+            'auto',
+            '--dps',
+            '70',
+            '--epsilons',
+            '0.01,0.001',
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    report = json.loads(proc.stdout)
+    assert report['energy_degree_bounds'] == [1, 1, 1, 1, 0, 0]
+    assert report['numerator'] == _auto_edge_external_numerator(dot('box_pow3.dot'), {0: 1, 1: 1, 2: 1, 3: 1})
+    assert mp.mpf(report['abs_cff_minus_hybrid']) < mp.mpf('1e-55')
+    split_diffs = [mp.mpf(item['abs_to_hybrid']) for item in report['split_ltd']]
+    assert split_diffs[-1] < split_diffs[0] * mp.mpf('0.02')
+
+def test_bounded_hybrid_affine_caps_do_not_use_affine_shortcut_on_repeated_graph():
+    d = dot('box_pow3.dot')
+    hybrid = build_structure(d, 'hybrid', energy_degree_bounds={0: 1, 1: 1, 2: 1, 3: 1})
+    finite_difference_variants = [
+        var
+        for orient in hybrid['orientations']
+        for var in orient['variants']
+        if var['meta'].get('numerator_sample_kind') == 'bounded_degree_finite_difference'
+    ]
+    assert finite_difference_variants
+    assert any(
+        sum(int(x) for x in var['meta'].get('finite_difference_beta', [])) > 1
+        for var in finite_difference_variants
+    )
+    assert not any(
+        var['meta'].get('numerator_sample_kind') == 'physical_on_shell_affine_orbit'
+        for orient in hybrid['orientations']
+        for var in orient['variants']
+    )
+
+def test_ambiguous_orientation_labels_get_numerator_map_suffixes():
+    d = dot('box_pow3.dot')
+    hybrid = build_structure(d, 'hybrid', energy_degree_bounds={0: 1, 1: 2, 2: 2, 3: 2})
+    labels = [orient['orient_label'] for orient in hybrid['orientations']]
+    assert len(labels) == len(set(labels))
+    ambiguous = [orient for orient in hybrid['orientations'] if orient['meta'].get('base_orient_label') == 'xxxxxx']
+    assert len(ambiguous) > 1
+    assert all(orient['orient_label'].startswith('xxxxxx|N') for orient in ambiguous)
+    assert [orient['meta']['numerator_map_index'] for orient in ambiguous] == list(range(1, len(ambiguous) + 1))
+    assert all(orient['energy_map_symbols'] == list('xxxxxx') for orient in ambiguous)
+
 def test_bounded_degree_cff_supports_multiple_repeated_higher_bounds_e_only():
     d = dot('box_pow3.dot')
     ext4, loop3, default_masses = __import__('src.api').api._random_default_inputs(d, 1337)
     masses = {**default_masses, **BOX_MASSES}
-    bounds = {3: 4, 4: 4}
-    numerator = 'edges[3][0]**4 * edges[4][0]**4'
+    bounds = {3: 3, 4: 4}
+    numerator = _auto_edge_external_numerator(d, bounds)
     cff = build_structure(d, 'cff', energy_degree_bounds=bounds)
     hybrid = build_structure(d, 'hybrid', energy_degree_bounds=bounds)
     assert _denominator_surface_kinds(cff) <= {'e'}
     cff_val = evaluate_structure(cff, d, ext4, loop3, numerator, 80, masses)
     hybrid_val = evaluate_structure(hybrid, d, ext4, loop3, numerator, 80, masses)
     assert abs(cff_val - hybrid_val) < mp.mpf('1e-65')
+
+def test_bounded_degree_cff_supports_free_lower_sector_sunrise_channel():
+    d = dot('sunrise_pow4.dot')
+    bounds = {2: 5}
+    ext4, loop3, masses = __import__('src.api').api._random_default_inputs(d, 1337)
+    cff = build_structure(d, 'cff', energy_degree_bounds=bounds)
+    hybrid = build_structure(d, 'hybrid', energy_degree_bounds=bounds)
+    numerator = _edge_energy_monomial([0, 0, 5, 0, 0, 0])
+    assert _denominator_surface_kinds(cff) <= {'e'}
+    assert cff['backend'] == 'bounded_degree_bundle'
+    assert hybrid['backend'] == 'bounded_degree_hybrid_bundle'
+    cff_val = evaluate_structure(cff, d, ext4, loop3, numerator, 80, masses)
+    hybrid_val = evaluate_structure(hybrid, d, ext4, loop3, numerator, 80, masses)
+    assert abs(cff_val - hybrid_val) < mp.mpf('1e-65')
+
+@pytest.mark.parametrize('name,masses,bounds,numerator,dps,tol', [
+    (
+        'sunrise_pow4.dot',
+        ALL_MASSES,
+        {2: 3, 3: 3},
+        'edges[2][0]**3 * edges[3][0]**3',
+        80,
+        '1e-65',
+    ),
+    (
+        'proper_iterated_sandwiched_bubble.dot',
+        ITER_MASSES,
+        {1: 3, 3: 3},
+        'edges[1][0]**3 * edges[3][0]**3',
+        70,
+        '1e-55',
+    ),
+])
+def test_bounded_degree_cff_repeated_channel_high_power_combinations(name, masses, bounds, numerator, dps, tol):
+    d = dot(name)
+    ext4, loop3, default_masses = __import__('src.api').api._random_default_inputs(d, 123)
+    masses = {**default_masses, **masses}
+    cff = build_structure(d, 'cff', energy_degree_bounds=bounds)
+    hybrid = build_structure(d, 'hybrid', energy_degree_bounds=bounds)
+    assert _denominator_surface_kinds(cff) <= {'e'}
+    assert cff['orientations'] != hybrid['orientations']
+    cff_val = evaluate_structure(cff, d, ext4, loop3, numerator, dps, masses)
+    hybrid_val = evaluate_structure(hybrid, d, ext4, loop3, numerator, dps, masses)
+    assert abs(cff_val - hybrid_val) < mp.mpf(tol)
+
+def test_bounded_degree_cff_high_power_repeated_kite_still_builds_e_only():
+    d = dot('kite_nested_repeats.dot')
+    bounds = {0: 5}
+    cff = build_structure(d, 'cff', energy_degree_bounds=bounds)
+    hybrid = build_structure(d, 'hybrid', energy_degree_bounds=bounds)
+    assert _denominator_surface_kinds(cff) <= {'e'}
+    assert cff['backend'] == 'bounded_degree_bundle'
+    assert hybrid['backend'] == 'bounded_degree_hybrid_bundle'
 
 def test_bounded_degree_cff_rejects_nonconvergent_energy_bounds():
     split_dot = dot('box.dot')
@@ -1574,3 +1749,58 @@ def test_cff_ltd_test_helper_uses_bounded_degree_cff():
     )
     assert mp.mpf(rep['abs_cff_minus_ltd']) < mp.mpf('1e-65')
     assert rep['energy_divergence']['convergent'] is True
+
+def test_cli_test_cff_ltd_auto_numerator_for_bounded_box():
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'test-cff-ltd',
+            '--dot',
+            str(ROOT / 'examples' / 'graphs' / 'box.dot'),
+            '--energy-degree-bounds',
+            '0:3,2:2',
+            '--numerator-expr',
+            'auto',
+            '--dps',
+            '70',
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    report = json.loads(proc.stdout)
+    assert report['numerator'] == _auto_edge_external_numerator(dot('box.dot'), {0: 3, 2: 2})
+    assert report['energy_degree_bounds'] == [3, 0, 2, 0]
+    assert mp.mpf(report['abs_cff_minus_ltd']) < mp.mpf('1e-55')
+
+def test_cli_evaluate_auto_numerator_uses_json_energy_bounds(tmp_path):
+    d = dot('box.dot')
+    bounds = {0: 2, 1: 1}
+    data = build_structure(d, 'cff', energy_degree_bounds=bounds)
+    json_path = tmp_path / 'box_cff_bounded.json'
+    json_path.write_text(json.dumps(data))
+    base_cmd = [
+        sys.executable,
+        str(ROOT / 'hybrid3d.py'),
+        'evaluate',
+        '--orientation-json',
+        str(json_path),
+        '--dot',
+        str(ROOT / 'examples' / 'graphs' / 'box.dot'),
+        '--dps',
+        '60',
+    ]
+    auto_proc = subprocess.run(
+        [*base_cmd, '--numerator-expr', 'auto'],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    explicit_proc = subprocess.run(
+        [*base_cmd, '--numerator-expr', _auto_edge_external_numerator(d, bounds)],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    assert mp.mpf(auto_proc.stdout.strip()) == mp.mpf(explicit_proc.stdout.strip())

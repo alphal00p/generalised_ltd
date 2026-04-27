@@ -1189,6 +1189,17 @@ def _poly_mul(a: Sequence[Fraction], b: Sequence[Fraction]) -> Tuple[Fraction, .
         out.pop()
     return tuple(out)
 
+def _interpolation_nodes(degree: int) -> Tuple[int, ...]:
+    degree = int(degree)
+    if degree < 0:
+        return tuple()
+    candidates = [1, -1, 0]
+    n = 2
+    while len(candidates) < degree + 1:
+        candidates.extend([n, -n])
+        n += 1
+    return tuple(candidates[:degree + 1])
+
 def _contact_nodes(bound: int) -> Tuple[int, ...]:
     needed = max(0, int(bound) - 1)
     candidates = [0]
@@ -1233,6 +1244,34 @@ def _contact_weight_polys(bound: int) -> Dict[int, Tuple[Fraction, ...]]:
             weights[sample] = _poly_add(weights.get(sample, tuple()), _poly_scale(basis, scale))
     return {sample: poly for sample, poly in weights.items() if poly}
 
+def _channel_normal_form_terms(poly: Sequence[Fraction], channel_power: int):
+    """Decompose a dimensionless polynomial into powers of q^2-E^2.
+
+    A monomial u^r is written as u^p (1 + z)^a with r=2a+p and
+    z=u^2-1.  Since q^2-E^2=E^2 z, the tuple returned for each term is
+    (remaining_denominator_power, parity, cancelled_denominator_power,
+    inverse_ose_power, coefficient).
+    """
+    channel_power = int(channel_power)
+    combined: Dict[Tuple[int, int, int, int], Fraction] = {}
+    for power, raw_coeff in enumerate(poly):
+        coeff = Fraction(raw_coeff)
+        if not coeff:
+            continue
+        quotient_power, parity = divmod(int(power), 2)
+        for z_power in range(quotient_power + 1):
+            term_coeff = coeff * Fraction(math.comb(quotient_power, z_power))
+            remaining = max(0, channel_power - z_power)
+            cancelled = max(0, z_power - channel_power)
+            inverse_ose_power = 2 * z_power + parity
+            key = (remaining, parity, cancelled, inverse_ose_power)
+            combined[key] = combined.get(key, Fraction(0)) + term_coeff
+    return tuple(
+        (remaining, parity, cancelled, inv_power, coeff)
+        for (remaining, parity, cancelled, inv_power), coeff in sorted(combined.items())
+        if coeff
+    )
+
 def _linear_expr_is_zero(expr: LinearEnergyExpr) -> bool:
     return not expr.internal_terms and not expr.external_terms and expr.const in {'0', '0.0'}
 
@@ -1244,20 +1283,36 @@ def _known_from_linear_as_vars(expr: LinearEnergyExpr) -> KnownLinearExpr:
 
 def _known_signature_expr(parsed: ParsedGraph, signature: Signature) -> KnownLinearExpr:
     signatures = tuple(edge.signature for edge in parsed.internal_edges)
-    basis = choose_basis_indices(signatures)
-    targets = [LinearEnergyExpr.zero() for _ in signatures]
-    for edge_id in basis:
-        targets[int(edge_id)] = LinearEnergyExpr.E(int(edge_id), 1)
-    loop_exprs = solve_loop_energy_from_target_edge_exprs(signatures, basis, targets, len(parsed.ext_names))
-    q = LinearEnergyExpr.zero()
+    basis = _component_basis_edges(signatures, range(len(signatures)))
+    basis_rows = [tuple(int(x) for x in signatures[int(edge_id)][0]) for edge_id in basis]
     loop_coeffs, ext_coeffs = signature
-    for idx, coeff in enumerate(loop_coeffs):
-        if coeff:
-            q = q + loop_exprs[int(idx)].mul(int(coeff))
-    for ext_id, coeff in enumerate(ext_coeffs):
-        if coeff:
-            q = q + LinearEnergyExpr.X(int(ext_id), int(coeff))
-    return _known_from_linear_as_vars(q.canonical())
+    coords = _row_coordinates_in_basis(basis_rows, loop_coeffs)
+    reconstructed = [Fraction(0) for _ in loop_coeffs]
+    for coeff, row in zip(coords, basis_rows):
+        for idx, value in enumerate(row):
+            reconstructed[int(idx)] += Fraction(coeff) * Fraction(value)
+    if tuple(reconstructed) != tuple(Fraction(x) for x in loop_coeffs):
+        raise NotImplementedError(
+            'Known numerator factor depends on a loop-energy direction absent from the lower sector'
+        )
+    out = KnownLinearExpr.zero()
+    external_terms = [Fraction(x) for x in ext_coeffs]
+    for coeff, edge_id in zip(coords, basis):
+        coeff = Fraction(coeff)
+        if not coeff:
+            continue
+        if coeff.denominator != 1:
+            raise NotImplementedError('Known numerator factors require integral linear coefficients')
+        out = out + KnownLinearExpr.var(int(edge_id), int(coeff))
+        for ext_id, basis_ext_coeff in enumerate(signatures[int(edge_id)][1]):
+            external_terms[int(ext_id)] -= coeff * Fraction(basis_ext_coeff)
+    for ext_id, coeff in enumerate(external_terms):
+        if not coeff:
+            continue
+        if coeff.denominator != 1:
+            raise NotImplementedError('Known numerator factors require integral external coefficients')
+        out = out + KnownLinearExpr.external(int(ext_id), int(coeff))
+    return out.canonical()
 
 def _remap_known_factor_to_sub(
     parsed: ParsedGraph,
@@ -2308,6 +2363,219 @@ def build_known_factor_bounded_cff_bundle(parsed: ParsedGraph, bounds: Tuple[int
         ))
     return ExpressionBundle('bounded_cff', tuple(), tuple(), tuple(edge.signature for edge in parsed.internal_edges), sb.build(), tuple(enriched))
 
+def _relative_signature_sign(reference: Signature, candidate: Signature) -> int:
+    if candidate == reference:
+        return 1
+    ref_loop, ref_ext = reference
+    neg = (tuple(-x for x in ref_loop), tuple(-x for x in ref_ext))
+    if candidate == neg:
+        return -1
+    raise ValueError('Signatures are not in the same repeated channel')
+
+def _channel_blackbox_degree(
+    channel: _LogicalChannel,
+    local_to_orig: Tuple[int, ...],
+    bounds: Tuple[int, ...],
+    replacements: Dict[int, LinearEnergyExpr],
+) -> int:
+    degree = 0
+    for local_id in channel.members:
+        orig_id = int(local_to_orig[int(local_id)])
+        if orig_id not in replacements:
+            degree += int(bounds[orig_id])
+    return int(degree)
+
+def _active_repeated_channel(
+    parsed: ParsedGraph,
+    local_to_orig: Tuple[int, ...],
+    bounds: Tuple[int, ...],
+    replacements: Dict[int, LinearEnergyExpr],
+) -> Optional[Tuple[_LogicalChannel, int]]:
+    for channel in _logical_channels(parsed):
+        if int(channel.power) <= 1:
+            continue
+        degree = _channel_blackbox_degree(channel, local_to_orig, bounds, replacements)
+        if degree > 2:
+            return channel, degree
+    return None
+
+def _channel_replacement_expr(edge_id: int, sample: int, rel_sign: int) -> LinearEnergyExpr:
+    sample = int(sample) * int(rel_sign)
+    return LinearEnergyExpr.zero() if sample == 0 else LinearEnergyExpr.E(int(edge_id), sample)
+
+def _channel_y_factor(parsed: ParsedGraph, signature: Signature) -> KnownLinearExpr:
+    return _known_signature_expr(parsed, signature)
+
+def _channel_recursive_terms(
+    parsed: ParsedGraph,
+    original_signatures: Tuple[Signature, ...],
+    local_to_orig: Tuple[int, ...],
+    bounds: Tuple[int, ...],
+    replacements: Dict[int, LinearEnergyExpr],
+    known_factors: Tuple[KnownLinearExpr, ...],
+    extra_half_edges: Tuple[int, ...],
+    prefactor: Fraction,
+    report: dict,
+    lower_sector_base: bool,
+    sb: SurfaceCacheBuilder,
+    out_terms: List[OrientationTerm],
+    branch: int,
+    depth: int = 0,
+) -> int:
+    if depth > 8:
+        raise RecursionError('bounded CFF channel recursion did not terminate')
+    active = _active_repeated_channel(parsed, local_to_orig, bounds, replacements)
+    if active is None:
+        return _known_recursive_terms(
+            parsed,
+            original_signatures,
+            local_to_orig,
+            bounds,
+            replacements,
+            known_factors,
+            extra_half_edges,
+            prefactor,
+            report,
+            lower_sector_base,
+            sb,
+            out_terms,
+            branch,
+        )
+
+    channel, degree = active
+    rep_local = int(channel.rep_edge)
+    rep_orig = int(local_to_orig[rep_local])
+    rep_signature = parsed.internal_edges[rep_local].signature
+    nodes = _interpolation_nodes(degree)
+    for node_idx, sample in enumerate(nodes):
+        basis_poly = _lagrange_basis(nodes, node_idx)
+        for remaining_power, parity, cancelled_power, inv_power, coeff in _channel_normal_form_terms(basis_poly, channel.power):
+            if not coeff:
+                continue
+            keep = set(int(local_id) for local_id in channel.members[:int(remaining_power)])
+            delete = tuple(int(local_id) for local_id in channel.members if int(local_id) not in keep)
+            subparsed, sub_to_local = _delete_parsed_edges(parsed, delete)
+            if not subparsed.internal_edges:
+                continue
+            sub_local_to_orig = tuple(int(local_to_orig[int(local_id)]) for local_id in sub_to_local)
+            sub_replacements = dict(replacements)
+            for local_id in channel.members:
+                orig_id = int(local_to_orig[int(local_id)])
+                rel = _relative_signature_sign(rep_signature, parsed.internal_edges[int(local_id)].signature)
+                sub_replacements[orig_id] = _channel_replacement_expr(orig_id, int(sample), rel)
+
+            sub_known: List[KnownLinearExpr] = [
+                _remap_known_factor_to_sub(parsed, subparsed, factor)
+                for factor in known_factors
+            ]
+            if int(parity):
+                sub_known.append(_channel_y_factor(subparsed, rep_signature))
+            if int(cancelled_power):
+                y_expr = _channel_y_factor(subparsed, rep_signature)
+                plus = (y_expr + KnownLinearExpr.ose(rep_orig, 1)).canonical()
+                minus = (y_expr - KnownLinearExpr.ose(rep_orig, 1)).canonical()
+                for _ in range(int(cancelled_power)):
+                    sub_known.extend([minus, plus])
+
+            channel_half_edges = tuple(int(rep_orig) for _ in range(int(inv_power)))
+            channel_prefactor = Fraction(prefactor) * Fraction(coeff) * (2 ** int(inv_power))
+            if not channel_prefactor:
+                continue
+            before = len(out_terms)
+            branch = _channel_recursive_terms(
+                subparsed,
+                original_signatures,
+                sub_local_to_orig,
+                bounds,
+                sub_replacements,
+                tuple(f.canonical() for f in sub_known),
+                tuple(extra_half_edges) + channel_half_edges,
+                channel_prefactor,
+                report,
+                True if delete else lower_sector_base,
+                sb,
+                out_terms,
+                branch,
+                depth + 1,
+            )
+            for term_idx in range(before, len(out_terms)):
+                term = out_terms[term_idx]
+                meta = dict(term.meta)
+                history = list(meta.get('channel_reductions', []))
+                history.append({
+                    'members': [int(local_to_orig[int(e)]) for e in channel.members],
+                    'representative': rep_orig,
+                    'power': int(channel.power),
+                    'degree_bound': int(degree),
+                    'sample': int(sample),
+                    'remaining_power': int(remaining_power),
+                    'parity': int(parity),
+                    'cancelled_power': int(cancelled_power),
+                    'inverse_ose_power': int(inv_power),
+                    'coefficient': _frac_to_str(Fraction(coeff)),
+                })
+                meta.update({
+                    'source': 'bounded_degree_channel_cff',
+                    'original_source': term.meta.get('source'),
+                    'energy_degree_bounds': list(bounds),
+                    'energy_divergence': report,
+                    'finite_pole_completion': True,
+                    'finite_pole_completion_e_surfaces_only': True,
+                    'channel_reductions': history,
+                    'merge_by_numerator_map': True,
+                })
+                out_terms[term_idx] = OrientationTerm(
+                    term.orientation_id,
+                    term.family,
+                    term.branch_id,
+                    term.edge_orientations,
+                    term.prefactor_sign,
+                    term.prefactor_half_edges,
+                    term.surface_chain,
+                    term.loop_energy_exprs,
+                    term.edge_energy_exprs,
+                    meta,
+                    term.numerator_surface_chain,
+                )
+    return branch
+
+def build_channel_bounded_cff_bundle(parsed: ParsedGraph, bounds: Tuple[int, ...], report: dict) -> ExpressionBundle:
+    sb = SurfaceCacheBuilder()
+    terms: List[OrientationTerm] = []
+    branch = _channel_recursive_terms(
+        parsed,
+        tuple(edge.signature for edge in parsed.internal_edges),
+        tuple(range(len(parsed.internal_edges))),
+        tuple(int(x) for x in bounds),
+        {},
+        tuple(),
+        tuple(),
+        Fraction(1),
+        report,
+        False,
+        sb,
+        terms,
+        0,
+    )
+    enriched = []
+    for idx, term in enumerate(terms):
+        meta = dict(term.meta)
+        meta['energy_degree_bounds'] = list(bounds)
+        enriched.append(OrientationTerm(
+            term.orientation_id,
+            term.family,
+            idx,
+            term.edge_orientations,
+            term.prefactor_sign,
+            term.prefactor_half_edges,
+            term.surface_chain,
+            term.loop_energy_exprs,
+            term.edge_energy_exprs,
+            meta,
+            term.numerator_surface_chain,
+        ))
+    return ExpressionBundle('bounded_cff', tuple(), tuple(), tuple(edge.signature for edge in parsed.internal_edges), sb.build(), tuple(enriched))
+
 def build_bounded_degree_cff_bundle(parsed, energy_degree_bounds):
     signatures = tuple(e.signature for e in parsed.internal_edges)
     bounds = normalize_energy_degree_bounds(energy_degree_bounds, len(signatures))
@@ -2342,7 +2610,7 @@ def build_bounded_degree_cff_bundle(parsed, energy_degree_bounds):
 
     if high_edges:
         try:
-            return build_known_factor_bounded_cff_bundle(parsed, bounds, report)
+            return build_channel_bounded_cff_bundle(parsed, bounds, report)
         except NotImplementedError as exc:
             raise NotImplementedError(
                 'Pure CFF bounded-degree lift could not build the lower contact completion '
@@ -2427,7 +2695,7 @@ def _build_confluent_hybrid_bundle(parsed: ParsedGraph, energy_degree_bounds=Non
             if order % 2:
                 residue_sign *= int(sigma)
         residue_norm=Fraction(1, _multi_factorial(alpha))
-        if bounds is None or max(bounds) <= 1:
+        if bounds is None:
             beta_candidates=[beta for beta in _iter_multiindices_leq(alpha) if sum(beta) <= 1]
         else:
             beta_candidates=[beta for beta in _iter_multiindices_leq(alpha)]
@@ -2441,7 +2709,7 @@ def _build_confluent_hybrid_bundle(parsed: ParsedGraph, energy_degree_bounds=Non
             leibniz=Fraction(1)
             for a,b in zip(alpha,beta):
                 leibniz *= Fraction(math.comb(int(a), int(b)))
-            if bounds is None or max(bounds) <= 1:
+            if bounds is None:
                 num_samples=_numerator_derivative_samples(
                     beta,
                     signatures,

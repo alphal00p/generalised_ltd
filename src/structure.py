@@ -232,6 +232,18 @@ def minimal_structure_from_bundle(bundle, parsed, backend: str, family: str, val
         out['meta']['merged_orientation_labels'] = list(entry['merged_orientation_labels'])
         orientations.append(out)
 
+    labels: Dict[str, List[Dict[str, Any]]] = {}
+    for orient in orientations:
+        labels.setdefault(str(orient.get('orient_label', '')), []).append(orient)
+    for base_label, items in labels.items():
+        if len(items) <= 1:
+            continue
+        for local_idx, orient in enumerate(items, start=1):
+            orient['meta']['base_orient_label'] = base_label
+            orient['meta']['numerator_map_index'] = local_idx
+            orient['meta']['numerator_map_ambiguity_count'] = len(items)
+            orient['orient_label'] = f'{base_label}|N{local_idx}'
+
     emitted_denominator_surface_ids = set()
     emitted_numerator_surface_ids = set()
     for orient in orientations:

@@ -18,8 +18,10 @@ sys.path.insert(0, str(ROOT))
 from src import load_dot_graph, validate_graph, build_structure, evaluate_structure, compare_three_modes, pretty_structure, run_test, run_cff_ltd_test
 from src.api import _random_default_inputs
 from src import structure as ST
+from src import graph_io as GIO
 from src import graph_signatures as SIG2G
 from src import symbolica_eval as SYMEVAL
+from src.orientation_bundle import normalize_energy_degree_bounds
 
 
 def parse_json_arg(s: str):
@@ -90,6 +92,31 @@ def resolve_test_energy_degree_bounds(args):
     if common is not None and cff_only is not None:
         raise SystemExit('error: use either --energy-degree-bounds or --cff-energy-degree-bounds, not both')
     return common, cff_only
+
+
+def auto_numerator_expr_for_bounds(dot, energy_degree_bounds) -> str:
+    parsed = GIO.parse_dot_graph(dot)
+    bounds = normalize_energy_degree_bounds(energy_degree_bounds, len(parsed.internal_edges))
+    if bounds is None:
+        raise SystemExit('--numerator-expr auto requires --energy-degree-bounds or JSON graph.energy_degree_bounds')
+    if any(bounds) and not parsed.ext_names:
+        raise SystemExit('--numerator-expr auto requires at least one external momentum symbol')
+    factors = []
+    n_ext = len(parsed.ext_names)
+    for edge_id, degree in enumerate(bounds):
+        for power_index in range(int(degree)):
+            ext_id = (edge_id + power_index) % n_ext
+            factors.append(f'dot(edges[{edge_id}], ext[{ext_id}])')
+    return ' * '.join(factors) if factors else '1'
+
+
+def resolve_numerator_expr(dot, requested_expr: str | None, energy_degree_bounds=None, data: dict | None = None) -> str:
+    if requested_expr != 'auto':
+        return requested_expr or '1'
+    bounds = energy_degree_bounds
+    if bounds is None and data is not None:
+        bounds = data.get('graph', {}).get('energy_degree_bounds')
+    return auto_numerator_expr_for_bounds(dot, bounds)
 
 
 def _profile_target_from_arg(item: str) -> tuple[str, pathlib.Path]:
@@ -351,15 +378,23 @@ def cmd_graph_from_signatures(args):
 
 def cmd_build(args):
     dot = load_dot_graph(args.dot)
+    energy_degree_bounds = parse_energy_degree_bounds(getattr(args, 'energy_degree_bounds', None))
     try:
         data = build_structure(
             dot,
             args.family,
-            energy_degree_bounds=parse_energy_degree_bounds(getattr(args, 'energy_degree_bounds', None)),
+            energy_degree_bounds=energy_degree_bounds,
         )
     except NotImplementedError as exc:
         print(f'error: {exc}', file=sys.stderr)
         raise SystemExit(2)
+    if getattr(args, 'numerator_expr', None) is not None:
+        data.setdefault('graph', {})['numerator_expr'] = resolve_numerator_expr(
+            dot,
+            args.numerator_expr,
+            energy_degree_bounds=energy_degree_bounds,
+            data=data,
+        )
     txt = json.dumps(data, indent=2)
     if args.json_out:
         pathlib.Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
@@ -376,6 +411,7 @@ def cmd_build(args):
 def cmd_evaluate(args):
     data = parse_json_arg(args.orientation_json)
     dot = load_dot_graph(args.dot)
+    numerator_expr = resolve_numerator_expr(dot, args.numerator_expr, data=data)
     ext4, loop3, masses = resolve_evaluate_inputs(dot, args)
     evaluator_backend = args.evaluator_backend
     if args.use_symbolica and evaluator_backend == 'builtin':
@@ -426,8 +462,8 @@ def cmd_evaluate(args):
         symbolica_backend = 'symbolica_compiled' if evaluator_backend == 'symbolica' else evaluator_backend
         metadata = SYMEVAL.symbolica_evaluator_metadata(data, symbolica_backend)
         compiled_num = metadata.get('numerator_expr')
-        if args.numerator_expr is not None and compiled_num is not None and args.numerator_expr != compiled_num:
-            raise SystemExit(f'Compiled Symbolica numerator is {compiled_num!r}, got --numerator-expr {args.numerator_expr!r}')
+        if args.numerator_expr is not None and compiled_num is not None and numerator_expr != compiled_num:
+            raise SystemExit(f'Compiled Symbolica numerator is {compiled_num!r}, got --numerator-expr {numerator_expr!r}')
         val, profile = SYMEVAL.evaluate_symbolica(
             data,
             dot,
@@ -460,7 +496,7 @@ def cmd_evaluate(args):
         if batch_size < 1:
             raise SystemExit('--profiling must be positive')
         mp.mp.dps = args.dps
-        num_fn = ST.numerator_from_expr(args.numerator_expr or '1')
+        num_fn = ST.numerator_from_expr(numerator_expr)
         start = time.perf_counter()
         val = None
         for _ in range(SYMEVAL.DEFAULT_PROFILE_CALLS):
@@ -481,7 +517,7 @@ def cmd_evaluate(args):
             'seconds_per_call': elapsed / SYMEVAL.DEFAULT_PROFILE_CALLS,
         }, indent=2))
         return
-    val = evaluate_structure(data, dot, ext4, loop3, args.numerator_expr or '1', args.dps, masses)
+    val = evaluate_structure(data, dot, ext4, loop3, numerator_expr, args.dps, masses)
     print(val)
 
 
@@ -491,6 +527,7 @@ def cmd_compile(args):
         raise SystemExit('--orientation-json must be a file path for compile')
     data = json.loads(json_path.read_text())
     dot = load_dot_graph(args.dot)
+    numerator_expr = resolve_numerator_expr(dot, args.numerator_expr, data=data)
     out_json = pathlib.Path(args.json_out) if args.json_out else json_path
     compiler_flags = None
     if args.compiler_flags:
@@ -499,7 +536,7 @@ def cmd_compile(args):
         print(SYMEVAL.format_symbolica_evaluator_inputs(
             data,
             dot,
-            numerator_expr=args.numerator_expr,
+            numerator_expr=numerator_expr,
             value_type=args.value_type,
             n_cores=args.n_cores,
             iterations=args.iterations,
@@ -512,7 +549,7 @@ def cmd_compile(args):
     metadata = SYMEVAL.compile_symbolica_evaluator(
         data,
         dot,
-        numerator_expr=args.numerator_expr,
+        numerator_expr=numerator_expr,
         json_path=out_json,
         output_path=pathlib.Path(args.output) if args.output else None,
         eager_output_path=pathlib.Path(args.eager_output) if args.eager_output else None,
@@ -541,12 +578,13 @@ def cmd_compare(args):
     loop3 = maybe_parse_four_vectors(args.loop3)
     masses = parse_mass_map(args)
     energy_bounds, cff_energy_bounds = resolve_test_energy_degree_bounds(args)
+    numerator_expr = resolve_numerator_expr(dot, args.numerator_expr, energy_degree_bounds=energy_bounds if energy_bounds is not None else cff_energy_bounds)
     if ext4 is None or loop3 is None or masses is None:
-        rep = run_test(dot, ext4=ext4, loop3=loop3, numerator_expr=args.numerator_expr, dps=args.dps, mass_map=masses, seed=args.seed, epsilons=parse_epsilons_arg(args.epsilons) if args.epsilons else ('0.1','0.05','0.025','0.0125'), cff_data=parse_json_arg(args.cff_json) if args.cff_json else None, hybrid_data=parse_json_arg(args.hybrid_json) if args.hybrid_json else None, cff_energy_degree_bounds=cff_energy_bounds, energy_degree_bounds=energy_bounds)
+        rep = run_test(dot, ext4=ext4, loop3=loop3, numerator_expr=numerator_expr, dps=args.dps, mass_map=masses, seed=args.seed, epsilons=parse_epsilons_arg(args.epsilons) if args.epsilons else ('0.1','0.05','0.025','0.0125'), cff_data=parse_json_arg(args.cff_json) if args.cff_json else None, hybrid_data=parse_json_arg(args.hybrid_json) if args.hybrid_json else None, cff_energy_degree_bounds=cff_energy_bounds, energy_degree_bounds=energy_bounds)
         txt = json.dumps(rep, indent=2)
     else:
         eps = parse_epsilons_arg(args.epsilons) if args.epsilons else ('0.1', '0.05', '0.025', '0.0125')
-        data = compare_three_modes(dot, ext4, loop3, args.numerator_expr, args.dps, eps, masses, cff_data=parse_json_arg(args.cff_json) if args.cff_json else None, hybrid_data=parse_json_arg(args.hybrid_json) if args.hybrid_json else None, cff_energy_degree_bounds=cff_energy_bounds, energy_degree_bounds=energy_bounds)
+        data = compare_three_modes(dot, ext4, loop3, numerator_expr, args.dps, eps, masses, cff_data=parse_json_arg(args.cff_json) if args.cff_json else None, hybrid_data=parse_json_arg(args.hybrid_json) if args.hybrid_json else None, cff_energy_degree_bounds=cff_energy_bounds, energy_degree_bounds=energy_bounds)
         txt = json.dumps(data, indent=2)
     if args.json_out:
         pathlib.Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
@@ -561,7 +599,8 @@ def cmd_test(args):
     masses = parse_mass_map(args)
     eps = parse_epsilons_arg(args.epsilons) if args.epsilons else ('0.1', '0.05', '0.025', '0.0125')
     energy_bounds, cff_energy_bounds = resolve_test_energy_degree_bounds(args)
-    rep = run_test(dot, ext4=ext4, loop3=loop3, numerator_expr=args.numerator_expr, dps=args.dps, mass_map=masses, seed=args.seed, epsilons=eps, cff_data=parse_json_arg(args.cff_json) if args.cff_json else None, hybrid_data=parse_json_arg(args.hybrid_json) if args.hybrid_json else None, cff_energy_degree_bounds=cff_energy_bounds, energy_degree_bounds=energy_bounds)
+    numerator_expr = resolve_numerator_expr(dot, args.numerator_expr, energy_degree_bounds=energy_bounds if energy_bounds is not None else cff_energy_bounds)
+    rep = run_test(dot, ext4=ext4, loop3=loop3, numerator_expr=numerator_expr, dps=args.dps, mass_map=masses, seed=args.seed, epsilons=eps, cff_data=parse_json_arg(args.cff_json) if args.cff_json else None, hybrid_data=parse_json_arg(args.hybrid_json) if args.hybrid_json else None, cff_energy_degree_bounds=cff_energy_bounds, energy_degree_bounds=energy_bounds)
     txt = json.dumps(rep, indent=2)
     if args.json_out:
         pathlib.Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
@@ -573,15 +612,17 @@ def cmd_test_cff_ltd(args):
     ext4 = maybe_parse_four_vectors(args.external)
     loop3 = maybe_parse_four_vectors(args.loop3)
     masses = parse_mass_map(args)
+    energy_bounds = parse_energy_degree_bounds(args.energy_degree_bounds)
+    numerator_expr = resolve_numerator_expr(dot, args.numerator_expr, energy_degree_bounds=energy_bounds)
     rep = run_cff_ltd_test(
         dot,
         ext4=ext4,
         loop3=loop3,
-        numerator_expr=args.numerator_expr,
+        numerator_expr=numerator_expr,
         dps=args.dps,
         mass_map=masses,
         seed=args.seed,
-        energy_degree_bounds=parse_energy_degree_bounds(args.energy_degree_bounds),
+        energy_degree_bounds=energy_bounds,
     )
     txt = json.dumps(rep, indent=2)
     if args.json_out:
@@ -618,6 +659,7 @@ def main():
     b.add_argument('--dot', required=True)
     b.add_argument('--json-out')
     b.add_argument('--energy-degree-bounds', help='Per-edge EMR energy degree bounds, e.g. "0:2,3:1" or JSON')
+    b.add_argument('--numerator-expr', help='Optional numerator metadata; use "auto" with --energy-degree-bounds to record the generated edge-external dot-product numerator')
     b.add_argument('--show-json', action='store_true')
     b.add_argument('--pretty', action='store_true')
     b.add_argument('--pretty-orientation')
@@ -631,7 +673,7 @@ def main():
     e.add_argument('--dot', required=True)
     e.add_argument('--external')
     e.add_argument('--loop3')
-    e.add_argument('--numerator-expr')
+    e.add_argument('--numerator-expr', help='Numerator expression; use "auto" with bounded-degree JSON to saturate graph.energy_degree_bounds with edge-external dot products')
     e.add_argument('--dps', type=int, default=80)
     e.add_argument('--masses')
     e.add_argument('--masses-file')
@@ -650,7 +692,7 @@ def main():
     comp = sub.add_parser('compile')
     comp.add_argument('--orientation-json', required=True)
     comp.add_argument('--dot', required=True)
-    comp.add_argument('--numerator-expr', default='1')
+    comp.add_argument('--numerator-expr', default='1', help='Numerator expression; use "auto" with bounded-degree JSON to saturate graph.energy_degree_bounds with edge-external dot products')
     comp.add_argument('--output')
     comp.add_argument('--eager-output', help='Path for the serialized Symbolica eager evaluator state')
     comp.add_argument('--json-out')
@@ -673,7 +715,7 @@ def main():
     c.add_argument('--dot', required=True)
     c.add_argument('--external')
     c.add_argument('--loop3')
-    c.add_argument('--numerator-expr', default='1')
+    c.add_argument('--numerator-expr', default='1', help='Numerator expression; use "auto" with --energy-degree-bounds to saturate the bounds with edge-external dot products')
     c.add_argument('--dps', type=int, default=80)
     c.add_argument('--epsilons', default='0.1,0.05,0.025,0.0125')
     c.add_argument('--json-out')
@@ -690,7 +732,7 @@ def main():
     t.add_argument('--dot', required=True)
     t.add_argument('--external')
     t.add_argument('--loop3')
-    t.add_argument('--numerator-expr', default='1')
+    t.add_argument('--numerator-expr', default='1', help='Numerator expression; use "auto" with --energy-degree-bounds to saturate the bounds with edge-external dot products')
     t.add_argument('--dps', type=int, default=80)
     t.add_argument('--epsilons', default='0.1,0.05,0.025,0.0125')
     t.add_argument('--json-out')
@@ -707,7 +749,7 @@ def main():
     cl.add_argument('--dot', required=True)
     cl.add_argument('--external')
     cl.add_argument('--loop3')
-    cl.add_argument('--numerator-expr', default='1')
+    cl.add_argument('--numerator-expr', default='1', help='Numerator expression; use "auto" with --energy-degree-bounds to saturate the bounds with edge-external dot products')
     cl.add_argument('--dps', type=int, default=80)
     cl.add_argument('--json-out')
     cl.add_argument('--energy-degree-bounds', required=True, help='Per-edge EMR energy degree bounds, e.g. "0:2" or JSON')
