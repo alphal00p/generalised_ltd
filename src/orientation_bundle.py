@@ -2338,18 +2338,7 @@ def build_bounded_degree_cff_bundle(parsed, energy_degree_bounds):
 
     high_edges = [idx for idx, bound in enumerate(bounds) if int(bound) > 2]
     signature_counts = _signature_multiplicities_ignoring_mass(parsed)
-    duplicate_bounded_edges = [
-        idx
-        for idx, bound in enumerate(bounds)
-        if int(bound) > 1 and signature_counts[_signature_key_ignoring_mass(parsed.internal_edges[idx].signature)] > 1
-    ]
     has_duplicate_signature = any(count > 1 for count in signature_counts.values())
-    if high_edges and duplicate_bounded_edges:
-        raise NotImplementedError(
-            'Bounded-degree pure CFF on repeated-signature graphs currently supports arbitrary '
-            'quadratic caps only.  Higher caps on repeated-signature edges should be evaluated '
-            'with family=hybrid, which implements the repeated-channel finite-difference lift.'
-        )
 
     if high_edges:
         try:

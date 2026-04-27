@@ -248,33 +248,28 @@ Current exact bounded-degree support:
   residue-basis energy coordinates.  Cubic, quartic, and quintic caps are
   covered by tests against the split-mass LTD limiting proxy; larger caps are
   accepted subject to the UV check and practical expression size.
-- `cff`: one-loop non-repeated graphs support arbitrary UV-convergent caps
+- `cff`: one-loop graphs support arbitrary UV-convergent caps
   with only regular `E`-surfaces in denominators.
 - `cff`: multiloop and split-repeated graphs support quadratic-or-lower caps by
   summing finite-pole remainder/contact sectors.  Deleted lower sectors are
   decomposed into loop-energy matroid components and rebuilt as auxiliary CFF
   causal minors, so denominator surfaces remain `E`-only; numerator-side cached
   surfaces may still be `E` or `H`.
-- `cff`: repeated-signature graphs, including unsplit repeated propagators,
-  support arbitrary quadratic-or-lower caps through the same recursive
-  contact/minor construction; denominator surfaces remain `E`-only.
 - `cff`: cubic, mixed cubic/quadratic, and quartic-or-higher caps are supported
-  through recursive lower-contact completion as long as no cap above two is
-  placed on a repeated-signature edge.  Terminal tadpoles are encoded as unit
-  denominator-tree nodes, so pure CFF denominators remain `E`-surface-only.
+  through recursive lower-contact completion, including on repeated-signature
+  graphs.  Terminal tadpoles are encoded as unit denominator-tree nodes, so pure
+  CFF denominators remain `E`-surface-only.
 
 Unsupported bounded CFF cases raise `NotImplementedError`; the old
 `CFF + (LTD - CFF)` contact fallback has been removed.
 
-The main remaining pure-CFF limitation is repeated signatures.  Quadratic caps
-on repeated-signature graphs are supported, but caps above two on a repeated
-signature are rejected and should be handled with `--family hybrid`.  For
-non-repeated high-power edges, the CFF builder recursively reduces lower
-contact sectors, decomposes multiloop lower denominators into loop-energy
-matroid components, and serializes terminal tadpoles as unit denominator-tree
-nodes.  If a lower sector cannot be reconstructed with this E-only grammar, the
-builder raises `NotImplementedError` instead of silently falling back to an LTD
-contact correction.
+The CFF builder does not treat repeated signatures as a special obstruction:
+they are just repeated denominator factors in the CFF expression.  For
+high-power bounds it recursively reduces lower contact sectors, decomposes
+multiloop lower denominators into loop-energy matroid components, and serializes
+terminal tadpoles as unit denominator-tree nodes.  If a lower sector cannot be
+reconstructed with this E-only grammar, the builder raises `NotImplementedError`
+instead of silently falling back to an LTD contact correction.
 
 ## Tests
 

@@ -987,8 +987,8 @@ The implementation exposes the following pure-CFF higher-power cases:
   \item arbitrary quadratic-or-lower caps \(d_e\le2\), on one-loop,
         multiloop, split-mass, and repeated-signature graphs, provided the
         loop-energy UV check is satisfied;
-  \item arbitrary UV-convergent caps on graphs for which no repeated-signature
-        edge carries a cap above two and every lower contact sector can be
+  \item arbitrary UV-convergent higher caps, including caps placed on
+        repeated-signature edges, whenever every lower contact sector can be
         decomposed into non-zero loop-energy matroid components.
 \end{enumerate}
 In these cases every pure-CFF denominator tree is built only from
@@ -996,11 +996,13 @@ In these cases every pure-CFF denominator tree is built only from
 linear forms, but the JSON marks them as numerator-only and the evaluator
 multiplies them in the numerator.
 
-The remaining deliberate pure-CFF rejection is a cap above two on a
-repeated-signature edge.  Those sectors combine the higher-power numerator lift
-with true repeated-pole denominator residues.  They are handled by the hybrid
-formula, whose repeated-channel finite-difference construction was designed
-for that situation.
+Pure CFF does not need a separate repeated-pole derivative construction:
+repeated propagators are repeated denominator factors in the CFF contour
+integral.  Therefore the same lower-contact completion applies when the
+higher-power numerator cap is placed on one of several repeated-signature
+copies.  The hybrid formula remains useful for the LTD-like repeated-channel
+organization, but it is not needed to make the pure-CFF high-power lift
+well-defined.
 
 Hybrid mode has a different status.  The hybrid repeated-channel formula is
 not constrained to keep pure-CFF denominator trees \(E\)-only: \(H\)-surfaces
@@ -1126,9 +1128,10 @@ contact produces the terminal tadpole derived below.  The implemented command
 now emits that completion as an explicit unit denominator node, so the resulting
 pure-CFF JSON remains \(E\)-surface-only in the denominator and agrees with LTD
 for all UV-convergent one-loop box monomial caps through the tested boundary
-\(\sum_e d_e\le6\).  The same higher cap is allowed on a non-repeated edge of a
-graph that contains other repeated propagators; caps above two on the repeated
-signature itself are still routed to the hybrid representation.
+\(\sum_e d_e\le6\).  The same higher cap is allowed on a graph that contains
+repeated propagators, including when the capped edge is one of the repeated
+copies, because pure CFF treats those copies as ordinary repeated denominator
+factors.
 
 \phantomsection
 \subsection*{1.3.2.c What the First Rejected Contact Sector Contains}
@@ -1306,12 +1309,11 @@ This gives a practical generalization of
 on active higher-power or known-polynomial edges, reduce quotient terms against
 the remaining denominators, decompose the lower denominator into matroid
 components, and serialize terminal components as unit denominator nodes.  The
-pure-CFF tests now include the one-loop box sectors above and the two-loop
+pure-CFF tests now include the one-loop box sectors above, repeated-signature
+box sectors with quartic caps on repeated copies, and the two-loop
 rank-deficient penta sectors; in every accepted case the denominator surface
-set is \(E\)-only and the value agrees with LTD.  The one class still rejected
-in pure CFF is a cap above two on a repeated-signature edge, where the
-denominator itself is a repeated pole and the hybrid repeated-channel formula
-is the intended representation.
+set is \(E\)-only and the value agrees with LTD or, for repeated propagators,
+with the hybrid value and the split-mass LTD limiting proxy.
 
 \chapter{Python Implementation and JSON Format}
 
@@ -1353,18 +1355,15 @@ family & graph class & supported bounds \\
 \texttt{hybrid} & no repeated propagators & any UV-convergent bounds; exact LTD collapse \\
 \texttt{hybrid} & repeated propagators & any tested UV-convergent bounds; finite-difference samples \\
 \texttt{cff} & any graph & all \(d_e\le2\), denominator \(E\)-surfaces only \\
-\texttt{cff} & non-repeated high-power edges & UV-convergent caps with lower-contact completion; denominator \(E\)-surfaces only \\
+\texttt{cff} & high-power edge caps & UV-convergent caps with lower-contact completion; denominator \(E\)-surfaces only \\
 \bottomrule
 \end{tabular}
 \end{center}
 
 The last \texttt{cff} row includes one-loop and multiloop sectors with mixed
-cubic/quadratic and quartic-or-higher caps, provided the high-power cap is not
-on a repeated-signature edge and the loop-energy UV check succeeds.  The
-remaining \texttt{cff} rejection is explicit in the code and tests: a
-higher-than-quadratic cap on a repeated-signature edge.  Such a term combines a
-higher numerator-energy lift with a repeated-pole denominator residue and is
-handled by \texttt{hybrid}.
+cubic/quadratic and quartic-or-higher caps, including caps on repeated-signature
+edges, provided the loop-energy UV check succeeds and the lower-contact
+completion can be decomposed into non-zero loop-energy matroid components.
 
 The hybrid high-power tests are not pure-CFF tests.  They compare the hybrid
 value with a split-mass LTD proxy and verify convergence as the mass split is
