@@ -1466,6 +1466,33 @@ def test_bounded_degree_cff_supports_unsplit_repeated_higher_bounds():
     assert fine_diff < coarse_diff * mp.mpf('0.02')
     assert fine_diff < mp.mpf('1e-9')
 
+def test_cli_test_accepts_common_energy_degree_bounds_for_repeated_topology():
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / 'hybrid3d.py'),
+            'test',
+            '--dot',
+            str(ROOT / 'examples' / 'graphs' / 'box_pow3.dot'),
+            '--energy-degree-bounds',
+            '0:1,1:1,2:0,3:4',
+            '--numerator-expr',
+            'edges[0][0] * edges[1][0] * edges[3][0]**4',
+            '--dps',
+            '70',
+            '--epsilons',
+            '0.01,0.001',
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    report = json.loads(proc.stdout)
+    assert report['energy_degree_bounds'] == [1, 1, 0, 4, 0, 0]
+    assert mp.mpf(report['abs_cff_minus_hybrid']) < mp.mpf('1e-55')
+    split_diffs = [mp.mpf(item['abs_to_hybrid']) for item in report['split_ltd']]
+    assert split_diffs[-1] < split_diffs[0] * mp.mpf('0.02')
+
 def test_bounded_degree_cff_supports_multiple_repeated_higher_bounds_e_only():
     d = dot('box_pow3.dot')
     ext4, loop3, default_masses = __import__('src.api').api._random_default_inputs(d, 1337)

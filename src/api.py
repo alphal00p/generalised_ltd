@@ -114,17 +114,19 @@ def compare_cff_ltd(dot, ext4, loop3, numerator_expr: str, dps: int = 80, mass_m
         'numerator': numerator_expr,
     }
 
-def compare_three_modes(dot, ext4, loop3, numerator_expr: str, dps: int = 80, epsilons=('0.1', '0.05', '0.025', '0.0125'), mass_map: Optional[Dict[str, Any]] = None, cff_data: Optional[dict] = None, hybrid_data: Optional[dict] = None, cff_energy_degree_bounds=None):
+def compare_three_modes(dot, ext4, loop3, numerator_expr: str, dps: int = 80, epsilons=('0.1', '0.05', '0.025', '0.0125'), mass_map: Optional[Dict[str, Any]] = None, cff_data: Optional[dict] = None, hybrid_data: Optional[dict] = None, cff_energy_degree_bounds=None, energy_degree_bounds=None):
     mp.mp.dps = dps
     parsed_merged = GIO.parse_dot_graph(dot)
+    common_bounds = energy_degree_bounds
+    cff_bounds = common_bounds if common_bounds is not None else cff_energy_degree_bounds
 
-    merged_cff = cff_data if cff_data is not None else build_structure(dot, 'cff', energy_degree_bounds=cff_energy_degree_bounds)
-    merged_hybrid = hybrid_data if hybrid_data is not None else build_structure(dot, 'hybrid')
+    merged_cff = cff_data if cff_data is not None else build_structure(dot, 'cff', energy_degree_bounds=cff_bounds)
+    merged_hybrid = hybrid_data if hybrid_data is not None else build_structure(dot, 'hybrid', energy_degree_bounds=common_bounds)
     cff_val = evaluate_structure(merged_cff, dot, ext4, loop3, numerator_expr, dps, mass_map)
     hybrid_val = evaluate_structure(merged_hybrid, dot, ext4, loop3, numerator_expr, dps, mass_map)
 
     split_dot, _ = GIO.build_split_mass_dot(dot)
-    split_ltd = build_structure(split_dot, 'ltd')
+    split_ltd = build_structure(split_dot, 'ltd', energy_degree_bounds=common_bounds)
     seq = []
     for eps in epsilons:
         split_masses = GIO.build_split_mass_assignments(parsed_merged, mass_map or {}, eps)
@@ -154,6 +156,7 @@ def compare_three_modes(dot, ext4, loop3, numerator_expr: str, dps: int = 80, ep
         'exact_equalities': exact_equalities,
         'pairwise_distinct_required': has_repeated,
         'pairwise_distinct': (not any(exact_equalities.values())) if has_repeated else None,
+        'energy_degree_bounds': merged_cff.get('graph', {}).get('energy_degree_bounds'),
         'split_ltd': seq,
     }
 
@@ -170,14 +173,14 @@ def run_cff_ltd_test(dot, ext4=None, loop3=None, numerator_expr: str = '1', dps:
     report['masses'] = masses
     return report
 
-def run_test(dot, ext4=None, loop3=None, numerator_expr: str = '1', dps: int = 80, epsilons=('0.1', '0.05', '0.025', '0.0125'), mass_map: Optional[Dict[str, Any]] = None, seed: int = 1337, cff_data: Optional[dict] = None, hybrid_data: Optional[dict] = None, cff_energy_degree_bounds=None):
+def run_test(dot, ext4=None, loop3=None, numerator_expr: str = '1', dps: int = 80, epsilons=('0.1', '0.05', '0.025', '0.0125'), mass_map: Optional[Dict[str, Any]] = None, seed: int = 1337, cff_data: Optional[dict] = None, hybrid_data: Optional[dict] = None, cff_energy_degree_bounds=None, energy_degree_bounds=None):
     rnd_ext4, rnd_loop3, rnd_masses = _random_default_inputs(dot, seed)
     ext4 = rnd_ext4 if ext4 is None else ext4
     loop3 = rnd_loop3 if loop3 is None else loop3
     masses = dict(rnd_masses)
     if mass_map:
         masses.update({str(k): v for k, v in mass_map.items()})
-    report = compare_three_modes(dot, ext4, loop3, numerator_expr, dps, epsilons, masses, cff_data=cff_data, hybrid_data=hybrid_data, cff_energy_degree_bounds=cff_energy_degree_bounds)
+    report = compare_three_modes(dot, ext4, loop3, numerator_expr, dps, epsilons, masses, cff_data=cff_data, hybrid_data=hybrid_data, cff_energy_degree_bounds=cff_energy_degree_bounds, energy_degree_bounds=energy_degree_bounds)
     report['external'] = [list(x) for x in ext4]
     report['loop3'] = [list(x) for x in loop3]
     report['masses'] = masses

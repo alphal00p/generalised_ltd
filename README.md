@@ -182,6 +182,11 @@ python3 hybrid3d.py test --dot examples/graphs/proper_iterated_sandwiched_bubble
   --masses '{"mA":0.8,"mB":0.9,"mC":1.1,"mD":0.75,"mE":1.0,"mF":0.6}' \
   --numerator-expr 'dot(edges[1], ext[0]) + dot(edges[4], ext[0])'
 
+python3 hybrid3d.py test --dot examples/graphs/box_pow3.dot \
+  --energy-degree-bounds 0:1,1:1,2:0,3:4 \
+  --numerator-expr 'edges[0][0] * edges[1][0] * edges[3][0]**4' \
+  --dps 80
+
 python3 hybrid3d.py test-cff-ltd --dot examples/graphs/box.dot \
   --energy-degree-bounds 0:2,1:2,2:2 \
   --numerator-expr 'edges[0][0]**2 * edges[1][0]**2 * edges[2][0]**2' \
@@ -200,6 +205,13 @@ The exported schema is intentionally evaluator-complete.  Evaluation uses only:
 - and the serialized factorization trees.
 
 There is no hidden LTD/CFF backend call during evaluation.
+
+For each variant, `half_edges` is an evaluated multiset, not debug metadata.
+Every occurrence of edge `e` multiplies the variant by `(2*E[e])^-1`; repeated
+ids encode powers of the same on-shell-energy residue factor.  The full variant
+factor is `pref * prod_e (2*E[e])^-count(e)` times numerator-side surfaces, the
+factorized denominator tree, and the numerator sampled at the orientation
+energy map.
 
 If the optional top-level `evaluator` block is present, it describes a compiled
 Symbolica evaluator for one fixed numerator.  The ordinary JSON semantics remain
@@ -238,6 +250,11 @@ python3 hybrid3d.py build --family cff --dot examples/graphs/box.dot \
 The builder checks both coordinate loop-energy UV degree and every
 one-parameter direction in loop-energy space.  If a residue at infinity may
 contribute, the build fails.
+
+For `test` and `compare`, `--energy-degree-bounds` is the common bounded-degree
+configuration used for the CFF expression, the hybrid expression, and the
+split-mass LTD reference.  The older `--cff-energy-degree-bounds` option is
+kept only for legacy CFF-only diagnostics.
 
 Current exact bounded-degree support:
 

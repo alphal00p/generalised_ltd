@@ -84,6 +84,13 @@ def parse_energy_degree_bounds(arg):
         out[key if key == '*' else int(key)] = int(value.strip())
     return out
 
+def resolve_test_energy_degree_bounds(args):
+    common = parse_energy_degree_bounds(getattr(args, 'energy_degree_bounds', None))
+    cff_only = parse_energy_degree_bounds(getattr(args, 'cff_energy_degree_bounds', None))
+    if common is not None and cff_only is not None:
+        raise SystemExit('error: use either --energy-degree-bounds or --cff-energy-degree-bounds, not both')
+    return common, cff_only
+
 
 def _profile_target_from_arg(item: str) -> tuple[str, pathlib.Path]:
     if '=' in item:
@@ -533,12 +540,13 @@ def cmd_compare(args):
     ext4 = maybe_parse_four_vectors(args.external)
     loop3 = maybe_parse_four_vectors(args.loop3)
     masses = parse_mass_map(args)
+    energy_bounds, cff_energy_bounds = resolve_test_energy_degree_bounds(args)
     if ext4 is None or loop3 is None or masses is None:
-        rep = run_test(dot, ext4=ext4, loop3=loop3, numerator_expr=args.numerator_expr, dps=args.dps, mass_map=masses, seed=args.seed, epsilons=parse_epsilons_arg(args.epsilons) if args.epsilons else ('0.1','0.05','0.025','0.0125'), cff_data=parse_json_arg(args.cff_json) if args.cff_json else None, hybrid_data=parse_json_arg(args.hybrid_json) if args.hybrid_json else None, cff_energy_degree_bounds=parse_energy_degree_bounds(getattr(args, 'cff_energy_degree_bounds', None)))
+        rep = run_test(dot, ext4=ext4, loop3=loop3, numerator_expr=args.numerator_expr, dps=args.dps, mass_map=masses, seed=args.seed, epsilons=parse_epsilons_arg(args.epsilons) if args.epsilons else ('0.1','0.05','0.025','0.0125'), cff_data=parse_json_arg(args.cff_json) if args.cff_json else None, hybrid_data=parse_json_arg(args.hybrid_json) if args.hybrid_json else None, cff_energy_degree_bounds=cff_energy_bounds, energy_degree_bounds=energy_bounds)
         txt = json.dumps(rep, indent=2)
     else:
         eps = parse_epsilons_arg(args.epsilons) if args.epsilons else ('0.1', '0.05', '0.025', '0.0125')
-        data = compare_three_modes(dot, ext4, loop3, args.numerator_expr, args.dps, eps, masses, cff_data=parse_json_arg(args.cff_json) if args.cff_json else None, hybrid_data=parse_json_arg(args.hybrid_json) if args.hybrid_json else None, cff_energy_degree_bounds=parse_energy_degree_bounds(getattr(args, 'cff_energy_degree_bounds', None)))
+        data = compare_three_modes(dot, ext4, loop3, args.numerator_expr, args.dps, eps, masses, cff_data=parse_json_arg(args.cff_json) if args.cff_json else None, hybrid_data=parse_json_arg(args.hybrid_json) if args.hybrid_json else None, cff_energy_degree_bounds=cff_energy_bounds, energy_degree_bounds=energy_bounds)
         txt = json.dumps(data, indent=2)
     if args.json_out:
         pathlib.Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
@@ -552,7 +560,8 @@ def cmd_test(args):
     loop3 = maybe_parse_four_vectors(args.loop3)
     masses = parse_mass_map(args)
     eps = parse_epsilons_arg(args.epsilons) if args.epsilons else ('0.1', '0.05', '0.025', '0.0125')
-    rep = run_test(dot, ext4=ext4, loop3=loop3, numerator_expr=args.numerator_expr, dps=args.dps, mass_map=masses, seed=args.seed, epsilons=eps, cff_data=parse_json_arg(args.cff_json) if args.cff_json else None, hybrid_data=parse_json_arg(args.hybrid_json) if args.hybrid_json else None, cff_energy_degree_bounds=parse_energy_degree_bounds(getattr(args, 'cff_energy_degree_bounds', None)))
+    energy_bounds, cff_energy_bounds = resolve_test_energy_degree_bounds(args)
+    rep = run_test(dot, ext4=ext4, loop3=loop3, numerator_expr=args.numerator_expr, dps=args.dps, mass_map=masses, seed=args.seed, epsilons=eps, cff_data=parse_json_arg(args.cff_json) if args.cff_json else None, hybrid_data=parse_json_arg(args.hybrid_json) if args.hybrid_json else None, cff_energy_degree_bounds=cff_energy_bounds, energy_degree_bounds=energy_bounds)
     txt = json.dumps(rep, indent=2)
     if args.json_out:
         pathlib.Path(args.json_out).parent.mkdir(parents=True, exist_ok=True)
@@ -670,7 +679,8 @@ def main():
     c.add_argument('--json-out')
     c.add_argument('--cff-json')
     c.add_argument('--hybrid-json')
-    c.add_argument('--cff-energy-degree-bounds', help='Build the CFF side with bounded-degree finite-pole completion')
+    c.add_argument('--energy-degree-bounds', help='Build CFF, hybrid, and split-mass LTD test structures with these EMR energy-degree bounds')
+    c.add_argument('--cff-energy-degree-bounds', help='Deprecated: build only the CFF side with bounded-degree finite-pole completion')
     c.add_argument('--masses')
     c.add_argument('--masses-file')
     c.add_argument('--seed', type=int, default=1337)
@@ -686,7 +696,8 @@ def main():
     t.add_argument('--json-out')
     t.add_argument('--cff-json')
     t.add_argument('--hybrid-json')
-    t.add_argument('--cff-energy-degree-bounds', help='Build the CFF side with bounded-degree finite-pole completion')
+    t.add_argument('--energy-degree-bounds', help='Build CFF, hybrid, and split-mass LTD test structures with these EMR energy-degree bounds')
+    t.add_argument('--cff-energy-degree-bounds', help='Deprecated: build only the CFF side with bounded-degree finite-pole completion')
     t.add_argument('--masses')
     t.add_argument('--masses-file')
     t.add_argument('--seed', type=int, default=1337)
