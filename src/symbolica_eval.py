@@ -457,6 +457,13 @@ def _common_metadata(
     }
 
 
+def _symbolica_function_map(functions: Mapping[Tuple[Any, str, Sequence[Any]], Any]) -> Dict[Tuple[Any, Sequence[Any]], Any]:
+    return {
+        (name, args): body
+        for (name, _printable, args), body in functions.items()
+    }
+
+
 def compile_symbolica_evaluator(
     data: Mapping[str, Any],
     dot: Any,
@@ -493,9 +500,8 @@ def compile_symbolica_evaluator(
 
     built = build_symbolica_expression(data, dot, numerator_expr)
     evaluator = built["expression"].evaluator(
-        {},
-        built["functions"],
         built["params"],
+        functions=_symbolica_function_map(built["functions"]),
         iterations=iterations,
         cpe_iterations=cpe_iterations,
         n_cores=n_cores,
@@ -882,7 +888,7 @@ def format_symbolica_evaluator_inputs(
     lines.append("Evaluator call")
     lines.append("--------------")
     lines.append(
-        "expression.evaluator(constants, functions, params, "
+        "expression.evaluator(params, functions=functions, "
         f"iterations={iterations}, cpe_iterations={cpe_iterations}, "
         f"n_cores={n_cores}, jit_compile=False, direct_translation=True)"
     )

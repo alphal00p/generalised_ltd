@@ -213,6 +213,13 @@ factor is `pref * prod_e (2*E[e])^-count(e)` times numerator-side surfaces, the
 factorized denominator tree, and the numerator sampled at the orientation
 energy map.
 
+The black-box numerator map is the EMR `edge_q0` map.  When a numerator uses
+`loops[i]` and the DOT graph has an explicit LMB carrier edge whose label is the
+corresponding loop name, the evaluator builds that loop four-vector from the
+carrier edge's sampled energy and spatial momentum.  This keeps `loops[i][0]`
+and `edges[carrier][0]` equivalent in generalised finite-pole/contact samples,
+where `loop_q0` need not be globally integrable into every EMR edge map.
+
 If the optional top-level `evaluator` block is present, it describes a compiled
 Symbolica evaluator for one fixed numerator.  The ordinary JSON semantics remain
 authoritative: `evaluate --use-symbolica` only changes how that same serialized
@@ -298,16 +305,19 @@ Current exact bounded-degree support:
 - `cff`: one-loop graphs support arbitrary UV-convergent caps
   with only regular `E`-surfaces in denominators.
 - `cff`: multiloop and split-repeated graphs support quadratic-or-lower caps by
-  summing finite-pole remainder/contact sectors.  Deleted lower sectors are
-  decomposed into loop-energy matroid components and rebuilt as auxiliary CFF
-  causal minors, so denominator surfaces remain `E`-only; numerator-side cached
-  surfaces may still be `E` or `H`.
+  summing finite-pole remainder/contact sectors.  Lower sectors are graph
+  minors: removed denominator edges are contracted before the remaining
+  denominator is decomposed into loop-energy matroid components and rebuilt as
+  auxiliary CFF causal minors.  Denominator surfaces therefore remain `E`-only;
+  numerator-side cached surfaces may still be `E` or `H`.
 - `cff`: cubic, mixed cubic/quadratic, and quartic-or-higher caps are supported
   through a channel normal form for repeated signatures and a recursive
   lower-contact completion for ordinary high-power edges.  This includes
   repeated-signature box, sunrise, kite, and iterated-bubble cases covered by
   tests.  Terminal tadpoles are encoded as unit denominator-tree nodes, so pure
-  CFF denominators remain `E`-surface-only.
+  CFF denominators remain `E`-surface-only.  The same unit-node encoding is used
+  when one denominator branch is a strict prefix of another branch, so both the
+  terminal branch and the longer branch contribute to the tree sum.
 
 Bounded pure CFF is constructed directly with E-surface denominator terms
 rather than through a `CFF + (LTD - CFF)` correction.
@@ -377,6 +387,8 @@ such as the repeated `k2` sector in `sunrise_pow4.dot` with
 falling into a lower-sector LTD correction.  For non-repeated high-power
 contacts it decomposes multiloop lower denominators into loop-energy matroid
 components and serializes terminal tadpoles as unit denominator-tree nodes.
+Every recursive lower sector uses the contracted graph minor of the removed
+denominator edges, including repeated-channel copies.
 
 ### Reading bounded repeated-channel JSON
 

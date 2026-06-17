@@ -889,18 +889,21 @@ Therefore
   \label{eq:quadratic-master}
 \end{equation}
 The first term is affine in \(q_e^0\) and can be handled by ordinary CFF.  The
-second term is a pinched graph with edge \(e\) removed, also handled by CFF.
-Consequently the pure CFF denominator remains \(E\)-surface only.  The
-non-trivial part is to lift the CFF expression of the deleted graph back to an
-orientation of the original graph.  The lift is completely mechanical:
+second term is a pinched graph minor with edge \(e\) contracted, also handled by
+CFF.  Consequently the pure CFF denominator remains \(E\)-surface only.  The
+non-trivial part is to lift the CFF expression of the contracted graph minor
+back to an orientation of the original graph.  The lift is completely
+mechanical:
 \begin{enumerate}[leftmargin=2em]
-  \item Delete the pinched edge set \(P\) from the denominator graph and build
-        a CFF representation of the lower graph
-        \(\Graph\setminus P\).  If the lower graph factorizes into independent
-        loop-energy components, build one CFF factor per component and multiply
-        the component representations.
+  \item Contract the pinched edge set \(P\) in the denominator graph and build
+        a CFF representation of the lower graph minor \(\Graph/P\).  Contracting,
+        rather than merely deleting, preserves the graph minor seen by the
+        remaining denominators and avoids disconnected bookkeeping half-edges in
+        repeated-channel lower sectors.  If the lower graph factorizes into
+        independent loop-energy components, build one CFF factor per component
+        and multiply the component representations.
   \item Every lower-sector CFF term fixes loop energies
-        \(K_{\mathfrak t}^{0,\,\Graph\setminus P}\) in the original LMB.  If
+        \(K_{\mathfrak t}^{0,\,\Graph/P}\) in the original LMB.  If
         component CFF factors were built separately, the global loop-energy map
         is reconstructed by solving the full-rank linear system defined by the
         union of component basis edges.
@@ -909,7 +912,7 @@ orientation of the original graph.  The lift is completely mechanical:
         \begin{equation}
           \widehat q_{e,\mathfrak t}^{\,0}
           =
-          \rho_e\cdot K_{\mathfrak t}^{0,\,\Graph\setminus P}
+          \rho_e\cdot K_{\mathfrak t}^{0,\,\Graph/P}
           +\eta_e\cdot p^0 .
           \label{eq:lifted-deleted-edge-energy}
         \end{equation}
@@ -1114,7 +1117,14 @@ half-edge factors, numerator-only linear factors, and one black-box numerator
 map per orientation.  The only grammar extension is that a denominator tree may
 now contain a unit node, represented by a node with no surfaces and no
 children.  Such a node evaluates to \(1\) and represents a terminal tadpole or
-unit lower-sector contact.
+unit lower-sector contact.  The same explicit unit leaf is inserted when one
+denominator branch is a strict prefix of another.  Thus chains \((a)\) and
+\((a,b)\) serialize to
+\[
+  \eta_a^{-1}+\eta_a^{-1}\eta_b^{-1},
+\]
+rather than losing the terminal \(\eta_a^{-1}\) contribution inside the longer
+branch.
 
 The implementation exposes the following pure-CFF higher-power cases:
 \begin{enumerate}[leftmargin=2em]
@@ -1178,7 +1188,8 @@ The normal form of each monomial is
   \label{eq:channel-normal-form}
 \end{equation}
 If \(j<\nu\), the term keeps \(\nu-j\) explicit copies of the repeated
-denominator and deletes the other \(j\) copies.  In JSON it contributes:
+denominator and contracts the other \(j\) copies in the lower graph minor.  In
+JSON it contributes:
 \begin{itemize}[leftmargin=2em]
   \item coefficient \(2^{2j+p}\ell_{a,2b+p}\binom{b}{j}\), because
         \(\omega_C^{-(2j+p)}=2^{2j+p}(2\omega_C)^{-(2j+p)}\);
@@ -1194,9 +1205,9 @@ If \(j\ge\nu\), no denominator copy of \(C\) remains.  The extra
   (y_C-\omega_C)^{j-\nu}(y_C+\omega_C)^{j-\nu},
 \]
 again expressed through cached surface keys.  The lower denominator is then the
-CFF expression of the graph with the whole repeated channel deleted.  This is
-still an \(E\)-surface-only denominator representation; the additional factors
-are explicitly numerator-side objects.
+CFF expression of the graph minor with the whole repeated channel contracted.
+This is still an \(E\)-surface-only denominator representation; the additional
+factors are explicitly numerator-side objects.
 
 This channel normal form is the reason pure CFF can now handle high powers on
 repeated propagators without ever invoking LTD contact denominators.  It also
@@ -1940,6 +1951,17 @@ hidden LTD or CFF object.  A variant contributes
   \prod_{t\in\texttt{denominator tree}}\eta_t^{-1}
 \]
 times the numerator sampled at the orientation's \texttt{edge\_q0} map.
+
+The \texttt{edge\_q0} map is the authoritative black-box numerator map.  If a
+numerator refers instead to \texttt{loops[i]} and the DOT graph has an explicit
+LMB carrier edge whose label is the corresponding loop name, the evaluator
+constructs that loop four-vector from the carrier edge: its energy is
+\texttt{edge\_q0[carrier]} and its spatial momentum is the carrier edge routing.
+The stored \texttt{loop\_q0} remains a diagnostic and a fallback for graphs
+without such a carrier edge.  Generalised contact samples are not required to
+integrate to a single global loop-energy assignment, so this convention is what
+makes \texttt{loops[i][0]} and \texttt{edges[carrier][0]} equivalent in the
+standalone evaluator.
 
 \section{Surface Cache}
 

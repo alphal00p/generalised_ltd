@@ -1888,12 +1888,13 @@ def _lower_cff_component_bundles(parsed: ParsedGraph):
 def build_lower_sector_cff_bundle(parsed: ParsedGraph) -> ExpressionBundle:
     """Build an E-surface-only CFF bundle for a pinched lower denominator.
 
-    Contact sectors from quadratic numerator completion delete propagators before
-    the remaining energy integrations are carried out.  The deleted graph can be
-    misleading: independent loop-energy factors may still share vertices.  This
-    builder decomposes the remaining denominator by the vector matroid of its
-    loop-energy rows, builds one CFF factor per component, and combines the
-    factors only after lifting them back to the original lower-sector edge ids.
+    Contact sectors from quadratic numerator completion contract propagators
+    before the remaining energy integrations are carried out.  The contracted
+    graph minor can be misleading: independent loop-energy factors may still
+    share vertices.  This builder decomposes the remaining denominator by the
+    vector matroid of its loop-energy rows, builds one CFF factor per component,
+    and combines the factors only after lifting them back to the original
+    lower-sector edge ids.
     """
     n_internal = len(parsed.internal_edges)
     signatures = tuple(edge.signature for edge in parsed.internal_edges)
@@ -2187,7 +2188,7 @@ def build_quadratic_recursive_bounded_cff_bundle(
     rem_bundle = build_quadratic_recursive_bounded_cff_bundle(parsed, tuple(rem_bounds), report, lower_sector_base)
     branch = _append_recursive_remainder_terms(parsed, bounds, report, sb, terms, branch, rem_bundle, int(next_edge))
 
-    subparsed, sub_to_orig = _delete_parsed_edges(parsed, (int(next_edge),))
+    subparsed, sub_to_orig = _contract_parsed_edges(parsed, (int(next_edge),))
     if subparsed.internal_edges:
         sub_bounds = tuple(int(bounds[orig_id]) for orig_id in sub_to_orig)
         sector_report = assert_energy_uv_convergent(tuple(edge.signature for edge in subparsed.internal_edges), sub_bounds)
@@ -2382,7 +2383,7 @@ def _known_recursive_terms(
             depth + 1,
         )
 
-    subparsed, sub_to_local = _delete_parsed_edges(parsed, (int(active),))
+    subparsed, sub_to_local = _contract_parsed_edges(parsed, (int(active),))
     if not subparsed.internal_edges:
         return branch
     sub_local_to_orig = tuple(int(local_to_orig[int(sub_id)]) for sub_id in sub_to_local)
@@ -2565,7 +2566,7 @@ def _channel_recursive_terms(
                 continue
             keep = set(int(local_id) for local_id in channel.members[:int(remaining_power)])
             delete = tuple(int(local_id) for local_id in channel.members if int(local_id) not in keep)
-            subparsed, sub_to_local = _delete_parsed_edges(parsed, delete)
+            subparsed, sub_to_local = _contract_parsed_edges(parsed, delete)
             if not subparsed.internal_edges:
                 continue
             sub_local_to_orig = tuple(int(local_to_orig[int(local_id)]) for local_id in sub_to_local)

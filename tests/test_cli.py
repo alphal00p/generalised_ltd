@@ -7,6 +7,8 @@ import pydot
 from src.api import load_dot_graph, validate_graph, build_structure, evaluate_structure, compare_three_modes, run_test, run_cff_ltd_test
 from src import graph_io as GIO
 from src import graph_signatures as SIG2G
+from src import orientation_bundle as OB
+from src import structure as ST
 from src.orientation_bundle import (
     ExpressionBundle,
     LinearEnergyExpr,
@@ -165,6 +167,16 @@ def _has_unit_denominator_tree(data):
         for variant in orient.get('variants', [])
         for node in variant['tree']['nodes']
     )
+
+def test_denominator_tree_preserves_strict_prefix_branches():
+    tree = ST._compress_chains([(0,), (0, 1)])
+    surfaces = [{'e': {'c': '2'}}, {'e': {'c': '3'}}]
+
+    assert any(
+        not node.get('surfaces') and not node.get('children')
+        for node in tree['nodes']
+    )
+    assert ST._sum_tree(tree, tree['roots'][0], surfaces, {}, {}) == mp.mpf(2) / 3
 
 def assert_unique_edge_numerator_maps(data):
     seen = set()
@@ -1469,6 +1481,21 @@ def test_bounded_degree_cff_supports_unsplit_repeated_higher_bounds():
     assert fine_diff < coarse_diff * mp.mpf('0.02')
     assert fine_diff < mp.mpf('1e-9')
 
+def test_repeated_channel_contact_uses_contracted_graph_minor(monkeypatch):
+    def reject_deleted_minor(*_args, **_kwargs):
+        raise AssertionError('repeated-channel contacts must contract removed denominator copies')
+
+    monkeypatch.setattr(OB, '_delete_parsed_edges', reject_deleted_minor)
+    d = dot('box_pow3.dot')
+    cff = build_structure(d, 'cff', energy_degree_bounds={0: 1, 1: 1, 2: 0, 3: 4})
+
+    assert _denominator_surface_kinds(cff) <= {'e'}
+    assert any(
+        var['meta'].get('source') == 'bounded_degree_channel_cff'
+        for orient in cff['orientations']
+        for var in orient['variants']
+    )
+
 def test_cli_test_accepts_common_energy_degree_bounds_for_repeated_topology():
     proc = subprocess.run(
         [
@@ -1709,6 +1736,15 @@ def test_bounded_degree_cff_supports_higher_one_loop_contact_recursion():
         cff_val = evaluate_structure(cff, split_dot, ext4, loop3, numerator, 80, masses)
         ltd_val = evaluate_structure(ltd, split_dot, ext4, loop3, numerator, 80, masses)
         assert abs(cff_val - ltd_val) < mp.mpf('1e-65'), (bounds, cff_val, ltd_val)
+
+def test_loop_numerator_uses_lmb_carrier_edge_sample_map():
+    d = dot('box.dot')
+    bounds = {0: 3, 1: 0, 2: 0, 3: 0}
+    loop_report = run_test(d, numerator_expr='loops[0][0]**3', energy_degree_bounds=bounds, dps=80)
+    edge_report = run_test(d, numerator_expr='edges[0][0]**3', energy_degree_bounds=bounds, dps=80)
+
+    assert abs(mp.mpf(loop_report['cff']) - mp.mpf(loop_report['hybrid'])) < mp.mpf('1e-65')
+    assert abs(mp.mpf(loop_report['cff']) - mp.mpf(edge_report['cff'])) < mp.mpf('1e-65')
 
 def test_bounded_degree_cff_supports_rank_deficient_multiloop_contact_completion():
     expr = 'prop(k1,m1)*prop(k1+p1,m2)*prop(k2,m3)*prop(k2+p2,m4)*prop(k1+k2+p3,m5)'

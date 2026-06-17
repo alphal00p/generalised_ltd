@@ -53,6 +53,16 @@ def _compress_chains(chains: List[Tuple[int, ...]]):
     nodes: List[Dict[str, Any]] = []
     root_map: Dict[int, int] = {}
     unit_root: Optional[int] = None
+    def add_unit_leaf(children: List[int]) -> int:
+        for child in children:
+            node = nodes[child]
+            if not node['surfaces'] and not node['children']:
+                return child
+        child = len(nodes)
+        nodes.append({'surfaces': [], 'children': []})
+        children.append(child)
+        return child
+
     def add_chain(chain, idxmap):
         nonlocal unit_root
         if not chain:
@@ -66,8 +76,14 @@ def _compress_chains(chains: List[Tuple[int, ...]]):
             idxmap[head] = idx
             nodes.append({'surfaces': [head], 'children': []})
         idx = idxmap[head]
-        if len(chain) > 1:
-            childmap = {nodes[c]['surfaces'][0]: c for c in nodes[idx]['children']}
+        if len(chain) == 1:
+            add_unit_leaf(nodes[idx]['children'])
+        else:
+            childmap = {
+                nodes[c]['surfaces'][0]: c
+                for c in nodes[idx]['children']
+                if nodes[c]['surfaces']
+            }
             child = add_chain(chain[1:], childmap)
             if child is not None and child not in nodes[idx]['children']:
                 nodes[idx]['children'].append(child)
@@ -337,6 +353,30 @@ def compute_edge_four_vectors(signatures, masses, loop_spatial, ext4, edge_q0_ex
     return tuple(out)
 
 
+def _loop_carrier_edge(parsed, loop_id: int) -> Optional[int]:
+    if int(loop_id) >= len(parsed.loop_names):
+        return None
+    loop_name = parsed.loop_names[int(loop_id)]
+    for edge in parsed.internal_edges:
+        if edge.label == loop_name:
+            return int(edge.edge_id)
+    return None
+
+
+def compute_loop_four_vectors(parsed, loop_spatial, ext4, loop_q0_exprs, edge_q0_exprs, E_vals, OSE_vals, uniform_scale=None):
+    out = []
+    for loop_id, expr in enumerate(loop_q0_exprs):
+        carrier_edge = _loop_carrier_edge(parsed, loop_id)
+        if carrier_edge is not None and carrier_edge < len(edge_q0_exprs):
+            q0 = _min_eval(edge_q0_exprs[carrier_edge], E_vals, OSE_vals, uniform_scale=uniform_scale)
+            spatial = edge_spatial_momentum(parsed.internal_edges[carrier_edge].signature, loop_spatial, ext4)
+        else:
+            q0 = _min_eval(expr, E_vals, OSE_vals, uniform_scale=uniform_scale)
+            spatial = loop_spatial[loop_id]
+        out.append((q0, *(mpf(x) for x in spatial)))
+    return tuple(out)
+
+
 def _sum_tree(tree, node_idx, surfaces, E_vals, OSE_vals, uniform_scale=None):
     node = tree['nodes'][node_idx]
     factor = mp.mpf(1)
@@ -435,9 +475,8 @@ def evaluate_minimal_bundle(data, dot, ext4, loop3, numerator_fn, mass_map=None,
             )
             num = numerator_cache.get(num_key)
             if num is None:
-                loop_q0 = [_min_eval(x, E_vals, OSE_vals, uniform_scale=uniform_scale_value) for x in var['loop_q0']]
-                loop_four = tuple((loop_q0[i], *(mpf(x) for x in loop3[i])) for i in range(len(loop3)))
                 edge_four = compute_edge_four_vectors(signatures, masses, loop3, ext4_mp, var['edge_q0'], parsed, ose_override=ose_override, uniform_scale=uniform_scale_value)
+                loop_four = compute_loop_four_vectors(parsed, loop3, ext4_mp, var['loop_q0'], var['edge_q0'], E_vals, OSE_vals, uniform_scale=uniform_scale_value)
                 num = _as_mp(numerator_fn(loop_four, ext4_mp, edge_four, edge_four))
                 numerator_cache[num_key] = num
             total += pref * num_surface_factor * num * denom
